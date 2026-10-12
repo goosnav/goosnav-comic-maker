@@ -1,103 +1,96 @@
 # Goosnav Comic Maker
 
-Double-click **`run.command`** on macOS, or run:
+Turn pencil scans into print masters and two social carousels. All image processing runs locally. Originals are never modified.
 
-```sh
-./run.sh
-```
+Double-click **run.command** on macOS, or run `./run.sh`. First launch needs uv and internet access to install the private Python environment. Later processing works offline. Windows and Linux launchers are included; native acceptance was performed on macOS.
 
-The launcher opens the local browser app. First launch needs [uv](https://docs.astral.sh/uv/getting-started/installation/) and internet access to install a private Python environment. Later local processing works offline. Windows: `./run.ps1` in PowerShell. Linux: `./run.sh`.
+## Daily use
 
-Choose one or more folders, choose a finish, choose an export folder, and press **Process comics**. Every comic gets its own folder with finished artwork, numbered carousel slides, and a final summary. Originals are never modified.
+1. **Choose folder** or **Choose files**. Set **Include subfolders** as needed. You can also paste paths.
+2. Choose a destination and press **Process comics**.
+3. Use **Open exports** or **Open all social** to collect the results.
 
-## The daily workflow
+Each batch creates a new numbered run. Failed comics do not stop the others. Estimated boundaries export with a **Needs review** flag. Refreshing the browser does not interrupt a batch; restarting the app resumes interrupted work. **Stop** takes effect between processing operations. **Retry unfinished** preserves completed stages whose output hashes still match.
 
-1. **Add originals.** Use **+ Folder**, **+ Files**, or paste paths. Subfolders are included by default. All supported images are included; use a filename filter such as `*raw*` if a folder mixes scans and finished art. The app skips its own export folders and the older tools’ numbered export folders.
-2. **Choose the finish.** Clean ink preserves the original pixel grid. Paint adds a separate crunchiness control. Ink strength retains more or less faint pencil; dust removal removes tiny isolated marks. Make a preview, compare the original, and inspect native pixels when needed.
-3. **Export.** The default canvas is 1080 × 1350. A 2160 × 2700 option is available. The summary rearranges panels to fit while preserving reading order. One source image is one comic.
-4. **Return to the batch.** Refreshing or closing the browser tab does not interrupt processing. Relaunching after a crash resumes unfinished jobs. **Stop batch** stops between processing operations; **Retry unfinished** resumes failed or stopped items. Completed identical exports are reused after their file hashes are checked.
+## Print and social quality
 
-**Inspect / reprocess** brings a comic back to the workbench. **Edit panels** lets you draw, delete, and reorder boxes. A corrected crop or changed finish produces a different export folder. **Reprocess completed comics** explicitly creates a new version, which can make new paid AI requests.
+- **Print:** cleaned full page and comic-only crop, each as lossless PNG and TIFF. Both contain black ink and white paper at full source resolution. The crop encloses accepted panel boundaries with a small margin.
+- **DPI:** preserve source DPI, or use 600 when missing. Optional integer print enlargement increases DPI proportionally, preserving physical print size. It enlarges existing pixels; it cannot reconstruct missing scan detail.
+- **Regular carousel:** one 2160 × 2700 slide per panel, followed by a summary. High-quality resizing retains fine strokes.
+- **Stylized carousel:** Red Sun black-and-white processing applied separately to full-resolution cleaned panel crops. Defaults are 512 pixels across each panel's artwork and 1024 across each summary panel's artwork. Final fitting uses nearest-neighbor resizing without dithering or gray fringes.
 
-## Quality controls
+Occasional controls live in **Settings**: ink strength, dust removal, print enlargement, the two artwork grid widths, and filename filtering. Leave a grid width blank to keep native pixels before fitting. Print masters always use the full-resolution cleanup, independent of stylization.
 
-The local pipeline normalizes paper shading, separates pencil from paper, finds and straightens panels, and renders the final images. Black-and-white outputs contain only black and white, including resized carousel images. There is no dithering. Color outputs use a limited palette shared across the page and slides. Gray edge blends cannot borrow unrelated colored fills.
+Inputs are limited to 85 megapixels. Enlarged print outputs have a separate 200-megapixel limit. Oversized enlargement is rejected before a run starts. The supplied 6602 × 5088 scans support 2× print enlargement.
 
-Crunchiness reduces the working pixel grid independently of threshold and final output size. Enlargement uses nearest-neighbor pixels. It makes an image larger without blur; it cannot recover details that were absent from the source. The normal fit-to-window preview uses browser display scaling for readability. **Inspect pixels** shows the exported grid without smoothing.
+## Edit panels
 
-Already-colored artwork is detected automatically and cleaned locally, without an AI call. Override the input type in Settings when needed. The app always retains a black-and-white set.
+Open **Edit panels** on an imported comic or a completed result. Saved boundaries load immediately. The editor uses full-resolution coordinates in the deskewed scan.
 
-## Optional colorization — beta
+- **Select** is the default. Drag a panel body to move it; drag any of eight handles to resize it.
+- Use **Add panel** to draw a new region. Delete and reorder panels with the sidebar controls.
+- Use **Fit**, **100%**, **Zoom to panel**, and **Pan**. Hold Space to pan or Ctrl/Cmd while scrolling to zoom.
+- Arrow keys nudge one source pixel; Shift + arrow nudges ten. Delete/Backspace deletes the selected panel. Ctrl/Cmd + Z undoes; Ctrl/Cmd + Shift + Z or Y redoes.
+- Edit coordinates directly. Crop, regular, stylized, and summary previews update from cached cleanup.
+- **Save boundaries** commits corrections. **Cancel**, Close, and Escape discard unsaved edits. **Restore automatic detection** changes the draft.
+- **Save & regenerate** updates only that comic in its existing run. A boundary-only correction leaves full-page print masters unchanged, replaces affected outputs, removes obsolete slides, and refreshes collected social copies. On an imported comic, **Save & process** starts a new run.
 
-Enable **Also make a color version** and configure Settings once. The default prompt asks for color only, with exact lettering, linework and composition preserved. You can edit it, restore it, or leave it blank to use the built-in prompt.
+Frame editing changes crop regions. It does not redraw visible border lines. Corrections are tied to source content and coordinate version; a changed source invalidates them.
 
-- OpenAI direct image edits: default `gpt-image-2.5-sunburst`; configurable model, quality, and image size.
-- Google Gemini direct image edits: `gemini-3-pro-image` or `gemini-3.1-flash-image`; configurable model and size.
-- **FIXTURE**: deterministic test colors, no API calls. This is clearly labeled and is not AI output.
-
-Provider request parameters follow the [OpenAI image guide](https://developers.openai.com/api/docs/guides/image-generation) and [Gemini image guide](https://ai.google.dev/gemini-api/docs/image-generation), checked September 21, 2026. Account model access can vary. Unsupported custom models report a per-comic failure while retaining local exports.
-
-AI sees the cleaned comic, with unnecessary scanner margins removed. Results are flattened into discrete colors and resized without adding intermediate colors. The original linework is **not** multiplied over the generated drawing. Structural checks detect missing or displaced dark lines and large changes in dark coverage. A suspect result may receive one corrective retry, then is saved under `color-draft`. These checks cannot guarantee unchanged text, faces or meaning. Inspect beta output before publishing.
-
-Vision recovery is optional and uses the configured OpenAI vision model after local panel-detection attempts remain uncertain. Local candidates remain available if the request fails. Best estimated crops are exported with a processing note. When there are no usable candidates, the full image is exported as one panel.
-
-**Cost control:** default two attempts per AI stage, at most 30 requests per batch. Every HTTP attempt counts. A limit of zero disables paid requests. This is a request count, not a dollar budget. Rate/connection/server failures get bounded backoff; bad keys, rejected requests and exhausted account quota do not loop. Successful image responses are checkpointed for recovery. An interrupted request with no returned response can still have incurred a provider charge.
-
-Keys can be entered in Settings or supplied as `OPENAI_API_KEY` and `GEMINI_API_KEY` to the launcher process. Saved keys take precedence and are stored in an owner-only file outside the project. Settings show only whether a key exists. Images leave the computer only when AI features are enabled; color goes to the selected provider, vision recovery goes to OpenAI.
-
-## Export contents
+## Export folders
 
 ```text
-exports/
-  comic-name--recipe-id/
-    bw/
-      comic.png           # cropped, finished comic at source resolution
-      source-layout.png   # complete processed scan
-      01-panel.png
-      02-panel.png
-      03-summary.png      # final slide in upload order
-      summary.png         # convenient duplicate of the final slide
-    color/                # optional; color-draft/ when flagged
+comic-maker-run-001/
+  Comic A/
+    print/
+      full-page.png
+      full-page.tif
       comic.png
-      source-layout.png
+      comic.tif
+    regular-carousel/
       01-panel.png
       02-panel.png
       03-summary.png
-      summary.png
-      provider-output.png # original provider response, when AI was used
-    manifest.json         # settings, source hash, crops, checks, output hashes
-  batch-id.json           # readable batch report
+    stylized-carousel/
+      01-panel.png
+      02-panel.png
+      03-summary.png
+    manifest.json
+  Comic A-2/
+    ...
+  all-social/
+    Comic A--regular-carousel--01-panel.png
+    Comic A--regular-carousel--02-panel.png
+    Comic A--regular-carousel--03-summary.png
+    Comic A--stylized-carousel--01-panel.png
+    ...
+  batch-<id>.json
 ```
 
-Upload the numbered slides, in order. `summary.png` duplicates the last numbered slide; do not upload both. Filenames include a recipe identifier so duplicate names and alternate finishes cannot overwrite each other. Original scans, exports and secrets are excluded from source control.
+The summary is saved once in each version, numbered after its panels. `all-social` contains byte-identical copies of every social slide. Prefixes distinguish comics and versions; numbers preserve reading order. Duplicate comic names receive deterministic suffixes. Marked export folders are excluded from recursive discovery.
 
-Settings, preview caches and SQLite job history live in:
+Manifests and recipes use version 2, with completed stages and output hashes. Replacement files are prepared before successful exports are replaced. Older exports remain untouched and accessible through history. Saved cleanup preferences migrate; obsolete AI and exclusive-style preferences are discarded. AI colorization, vision recovery, providers, and request accounting have been removed.
+
+## Local state and CLI
+
+Settings, correction records, previews, and SQLite batch history live outside the repository:
 
 - macOS: `~/Library/Application Support/GoosnavComicMaker`
 - Windows: `%LOCALAPPDATA%/GoosnavComicMaker`
 - Linux: `$XDG_DATA_HOME/GoosnavComicMaker` or `~/.local/share/GoosnavComicMaker`
 
-Override with `COMIC_MAKER_DATA` for isolated testing. Keep exports separate from the folder containing originals. The local server binds only to loopback, checks Host and Origin, and requires a session token for mutations.
-
-## Batch CLI
+Set `COMIC_MAKER_DATA` for isolated work. The server binds to loopback and checks Host, Origin, and a session token for mutations. Sibling apps are reference sources, not runtime dependencies.
 
 ```sh
-./run.sh batch "/path/to/scans" "/another/folder" --out "/path/to/exports" --json
-./run.sh batch "/path/to/scans" --out "/path/to/exports" --style paint --pattern '*raw*'
-./run.sh batch "/path/to/scans" --out "/path/to/exports" --colorize
-./run.sh batch "/path/to/test-images" --out "/path/to/test-exports" --fixture
+./run.sh batch "/path/to/scans" --out "/path/to/exports" --json
+./run.sh batch "/path/to/scans" --out "/path/to/exports" --pattern '*raw*'
+./run.sh batch "/path/to/scans" --out "/path/to/exports" --settings settings.json
 ```
 
-GUI and CLI use the same application service and saved settings. `--settings settings.json` supplies a full or partial settings object with default values for missing fields. Exit code 0 means all selected images completed; 2 means missing inputs or partial/failed results. CLI output manifests also permit completed work and saved provider responses to be reused on rerun. The persistent automatic queue belongs to the GUI.
+GUI and CLI share the same processing service. CLI runs create new numbered folders; automatic restart recovery belongs to the GUI queue. Exit code 0 means all images completed; 2 means missing inputs or incomplete results.
 
-## Verification and boundaries
+## Verification
 
-```sh
-./verify.sh
-```
+Run `./verify.sh` for processing, metadata, recovery, HTTP, CLI, and shutdown checks. Real browser interactions are implemented in `tests/browser_workflow.mjs`. See `VERIFICATION.md` for the executed checks and visual inspection record.
 
-Runs image invariants, real scan panel regressions when private examples are present, recovery tests, provider mocks, a real loopback HTTP workflow, an offline color fixture, CLI checks, and clean shutdown. It does not spend API credits. See `VERIFICATION.md` for observed browser and live-provider checks.
-
-This version targets bordered, mostly rectangular comics. It does not auto-publish, create captions, combine multiple scans into one comic, or accept PDF/PSD/multi-page TIFF. A single image is limited to 85 megapixels; requests for oversized master enlargements report an error. Unreadable files do not stop the batch. Best-guess crops can still need correction. macOS has been tested locally; Windows and Linux launcher scripts have not been run on their native platforms.
-
-The useful panel-detection and summary-layout code was adapted from the existing Comic Carousel Generator. Scan and color processing were rebuilt here, informed by Red Sun and Auto Colorizer. The sibling apps are not runtime dependencies.
+The detector targets mostly rectangular bordered comics. Use one image per comic; split animated images and multi-page TIFFs before import. PDF and PSD inputs are not supported.

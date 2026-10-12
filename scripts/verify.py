@@ -46,7 +46,7 @@ def main():
                     headers={'x-session':token}
                     assert client.get('/static/app.js').status_code==200
                     assert client.post('/api/settings',json={}).status_code==403
-                    values={'colorize':True,'provider':'fixture'}
+                    values={}
                     imported=client.post('/api/scan',headers=headers,json={'paths':[str(source)],'output':str(work/'exports')}).json()
                     identifier=imported['sources'][0]['id']
                     job=client.post('/api/jobs',headers=headers,json={'ids':[identifier],'output':str(work/'exports'),'settings':values}).json()
@@ -56,22 +56,23 @@ def main():
                         time.sleep(.1)
                     assert result['status']=='complete',result
                     item=result['items'][0]['result']
-                    assert item['fixture'] and item['panel_count']==2
+                    assert item['schema_version']==2 and item['panel_count']==2
+                    assert len(item['social_files'])==6
                     for name in item['files']:
                         with Image.open(Path(item['output'])/name) as im:
                             im.verify()
-                    url=f'/api/artifact/{job["id"]}/{identifier}/bw/summary.png'
+                    url=f'/api/artifact/{job["id"]}/{identifier}/regular-carousel/03-summary.png'
                     assert client.get(url).status_code==200
                     client.post('/api/quit',headers=headers,json={}).raise_for_status()
                 process.wait(timeout=10)
                 assert process.returncode==0
             finally:
                 if process.poll() is None: process.terminate();process.wait(timeout=10)
-        cli=subprocess.run([sys.executable,'-m','comic_maker','batch',str(source),'--out',str(work/'cli'),'--fixture','--json'],env=env,cwd=ROOT,capture_output=True,text=True,check=True)
-        assert json.loads(cli.stdout)['results'][0]['fixture']
+        cli=subprocess.run([sys.executable,'-m','comic_maker','batch',str(source),'--out',str(work/'cli'),'--json'],env=env,cwd=ROOT,capture_output=True,text=True,check=True)
+        assert json.loads(cli.stdout)['results'][0]['schema_version']==2
         negative=subprocess.run([sys.executable,'-m','comic_maker','batch',str(work/'missing.png'),'--out',str(work/'negative'),'--json'],env=env,cwd=ROOT,capture_output=True,text=True)
         assert negative.returncode==2
-    print('PASS: domain and recovery tests; real HTTP import/export; fixture color; CLI; negative path; clean shutdown.')
-    print('Browser visual checks are recorded separately in VERIFICATION.md. No paid API calls made by this verifier.')
+    print('PASS: processing and recovery tests; real HTTP import/export; collected social copies; CLI; negative path; clean shutdown.')
+    print('Browser interactions and scan inspection are recorded separately in VERIFICATION.md.')
 
 if __name__=='__main__': main()

@@ -1,26 +1,35 @@
-# Delivery contract
+# Implementation contract — version 0.2.0
 
-For a comic artist, turn folders of pencil scans into crisp finished comics and ordered social carousel PNGs through one local browser application. Optional beta colorization produces a second matching set.
+## Processing
 
-The normal workflow is choose folders, choose a saved look, choose an export folder, and process. Local processing works without credentials. One image is one comic. Sources remain untouched. A failure affects one stage or comic, never the whole queue.
+`imaging.py` loads originals, preserves DPI, and performs full-resolution ink cleanup. `detection.py` retains the existing bordered-panel detector, local recovery, and reading order. `layout_base.py` selects and places summary panels. `red_sun.py` contains the adapted black-and-white grid reduction; siblings are not imported at runtime.
 
-## Acceptance evidence
+`pipeline.py` is the shared GUI/CLI service. Schema 2 records independent recipes and file hashes for full-page print, print crop, regular carousel, and stylized carousel. Print enlargement is binary nearest-neighbor, with proportional DPI. Social canvases are 2160 × 2700. Regular fitting uses Lanczos; stylized fitting uses nearest-neighbor. Both summary and individual stylized artwork start from cleaned native crops.
 
-- Launch: `./run.command` opens the local browser GUI.
-- Image quality: binary output contains only black and white; color output contains only its shared flat palette; resizing cannot add gray fringes.
-- Real samples: all seven supplied raw TIFFs are processed, with panel counts and lettering inspected against the supplied edited references.
-- Batch: nested folders, duplicate names, damaged images, cached reruns, refresh, cancellation, and interrupted-run recovery.
-- Export: finished comic, source-layout master, each carousel slide, full-comic summary, settings/provenance manifest, optional color set.
-- GUI: import, preview, settings, processing, results, correction, and reopen through a real browser.
-- AI: deterministic fixture proves integration without network; mocked provider contracts and recovery tests; live results are reported separately.
-- Verification: `./verify.sh` composes tests and a real HTTP/CLI smoke in temporary storage.
+Each GUI batch creates a numbered run and stable, collision-free comic names. Completed phases are hash-checked on retries. Social directories are replaced through prepared staging directories with recoverable backups. Print files are prepared before replacement. Collected social copies are derived outputs and can be repaired independently. Existing schema 1 exports are readable and left unchanged.
 
-## Decisions
+## Queue and corrections
 
-- Python 3.12, FastAPI, Pillow, NumPy, OpenCV, HTTPX, SQLite, plain HTML/CSS/JavaScript. Shared services for GUI and CLI.
-- Copy useful image/detection code into this project; sibling apps are not runtime dependencies.
-- Clean ink is the default; Paint has a separate detail-scale control. Both have hard edges, no dithering. No original-line multiply overlay on AI results.
-- Rectangular bordered panels are the primary case. Local recovery precedes optional vision recovery. Uncertain results export best candidates with a warning; no candidates use one whole-art crop.
-- Default social canvas is 1080 × 1350, with a 2160 × 2700 option. Summary reflows the panels in reading order, using the existing layout scoring.
-- GUI is a monochrome print-workshop surface: Helvetica system text, Times editorial text, sharp borders, generous preview space.
-- macOS is the native acceptance platform. Windows/Linux launch scripts are supplied but must not be described as tested without evidence.
+`jobs.py` retains the SQLite queue and single image worker. Jobs persist their run location and per-comic status. Restart recovery requeues unfinished schema 2 items. Regeneration queues only the requested comic within the original run. Failures and uncertain estimates remain visible without blocking the rest of a batch.
+
+Preview preparation caches the deskewed full-resolution scan and cleanup. Crop-preview requests read those cached pixels and never save corrections. Corrections have a source SHA-256 and coordinate version. Saving checks that the current source matches the preview; reading ignores obsolete corrections.
+
+## Interfaces
+
+- `POST /api/preview`: prepare/read a preview and saved boundaries; optional boxes are a draft.
+- `POST /api/preview/render`: generate crop and slide previews from cached cleanup.
+- `GET /api/corrections/{source}`: read a valid saved correction.
+- `POST /api/corrections/{source}`: explicitly save validated boundaries from a matching preview.
+- `POST /api/jobs/{job}/regenerate`: queue one comic in the existing run, optionally overriding summary layout.
+
+Results include stage completion, review status, output hashes, and collected-social location. Server guards and native file pickers remain in place.
+
+## User interface
+
+`app.js` manages selection, settings, and the batch list. `editor.js` owns drafts, history, source coordinates, selection, resizing, drawing, panning, and preview request ordering. The image and SVG occupy the same image-only stage. Coordinates come from the inverse SVG screen transform; handles and labels scale to remain usable on screen.
+
+Only explicit save actions persist drafts. Save & regenerate uses the saved correction and the selected batch's settings. Result image URLs include output hashes so corrected summaries cannot remain stuck in the browser cache.
+
+## Acceptance
+
+The verification record covers print dimensions/DPI and limits, immutable sources, separate output stages, independent grids, summary ordering, collision-free collected copies, cancellation/restart, explicit corrections, GUI interactions, and a completed comic corrected through the GUI and regenerated in place. Frame editing controls crop regions, not visible ink strokes.

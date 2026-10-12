@@ -78,11 +78,10 @@ wheels = [
 
 [[package]]
 name = "goosnav-comic-maker"
-version = "0.1.0"
+version = "0.2.0"
 source = { virtual = "." }
 dependencies = [
     { name = "fastapi" },
-    { name = "httpx" },
     { name = "numpy" },
     { name = "opencv-python-headless" },
     { name = "pillow" },
@@ -91,13 +90,13 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "httpx" },
     { name = "pytest" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115,<1" },
-    { name = "httpx", specifier = ">=0.27,<1" },
     { name = "numpy", specifier = ">=2,<3" },
     { name = "opencv-python-headless", specifier = ">=4.12,<5" },
     { name = "pillow", specifier = ">=11,<13" },
@@ -105,7 +104,10 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8,<9" }]
+dev = [
+    { name = "httpx", specifier = ">=0.27,<1" },
+    { name = "pytest", specifier = ">=8,<9" },
+]
 
 [[package]]
 name = "h11"

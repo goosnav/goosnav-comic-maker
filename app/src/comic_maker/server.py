@@ -12,7 +12,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 from . import pipeline, imaging, __version__
-from .settings import Store, Settings, DEFAULT_PROMPT, atomic_json
+from .settings import Store, Settings, atomic_json
 from .jobs import Jobs
 
 STATIC=Path(__file__).resolve().parents[2]/'static'
@@ -72,6 +72,10 @@ def create_app(store=None,token=None):
     @app.exception_handler(ValueError)
     async def value_error(request,exc): return JSONResponse({'error':str(exc)},status_code=400)
 
+    @app.exception_handler(ValidationError)
+    async def invalid_settings(request,exc):
+        return JSONResponse({'error':'Invalid settings: '+str(exc)},status_code=400)
+
     @app.exception_handler(KeyError)
     async def missing_field(request,exc): return JSONResponse({'error':f'Missing request field: {exc}'},status_code=400)
 
@@ -87,18 +91,11 @@ def create_app(store=None,token=None):
     @app.get('/api/state')
     def state():
         session=store.read('session.json',{})
-        return {'version':__version__,'settings':store.settings().model_dump(),'keys':store.key_status(),
+        return {'version':__version__,'settings':store.settings().model_dump(),
                 'session':session,'jobs':jobs.list(),'default_output':str(Path.home()/'Pictures/Goosnav Exports')}
 
     @app.post('/api/settings')
     def settings(body:dict): return store.save(body).model_dump()
-
-    @app.post('/api/prompt/reset')
-    def reset(): return store.save({'prompt':DEFAULT_PROMPT}).model_dump()
-
-    @app.post('/api/key')
-    def key(body:dict):
-        store.set_key(body.get('provider'),body.get('key',''));return store.key_status()
 
     @app.post('/api/dialog')
     def choose(body:dict): return {'paths':dialog(body.get('kind','folder'))}
@@ -110,7 +107,8 @@ def create_app(store=None,token=None):
         if not isinstance(paths,list) or not all(isinstance(p,str) for p in paths): raise ValueError('Supply a list of folder or file paths')
         files,warnings=pipeline.discover(paths,values,body.get('output'))
         sources=jobs.register(files)
-        atomic_json(store.root/'session.json',{'paths':paths,'sources':sources,'output':body.get('output','')})
+        previous_session=store.read('session.json',{})
+        atomic_json(store.root/'session.json',{'paths':paths,'sources':sources,'output':body.get('destination',body.get('output',previous_session.get('output','')))})
         return {'sources':sources,'warnings':warnings}
 
     @app.get('/api/source/{identifier}')
@@ -129,7 +127,7 @@ def create_app(store=None,token=None):
 
     @app.get('/api/preview/{identifier}/{name}')
     def preview_file(identifier:str,name:str):
-        if not identifier.isalnum() or name not in ('source.png','ink.png','summary.png','pixels.png'): raise HTTPException(404)
+        if not identifier.isalnum() or name not in ('source.png','page.png','summary.png','crop.png','regular.png','stylized.png'): raise HTTPException(404)
         path=store.root/'previews'/identifier/name
         if not path.is_file(): raise HTTPException(404)
         return FileResponse(path)
@@ -138,10 +136,28 @@ def create_app(store=None,token=None):
     def start(body:dict):
         settings=Settings.model_validate(body.get('settings',{}));store.save(settings.model_dump())
         if not str(body.get('output','')).strip(): raise ValueError('Choose an export folder')
-        job=jobs.start(body.get('ids',[]),body['output'],settings,body.get('overrides'),bool(body.get('force',False)))
-        session=store.read('session.json',{});session['output']=job['output']
+        job=jobs.start(body.get('ids',[]),body['output'],settings)
+        session=store.read('session.json',{});session['output']=str(Path(body['output']).expanduser().resolve())
         atomic_json(store.root/'session.json',session)
         return job
+
+    @app.get('/api/corrections/{identifier}')
+    def read_correction(identifier:str):
+        return pipeline.correction(jobs.source(identifier), store)
+
+    @app.post('/api/corrections/{identifier}')
+    def save_correction(identifier:str, body:dict):
+        with jobs.image_lock:
+            return pipeline.save_correction(jobs.source(identifier), store, body['preview'], body['boxes'])
+
+    @app.post('/api/preview/render')
+    def render_preview(body:dict):
+        with jobs.image_lock:
+            return pipeline.render_preview(store, body['preview'], body['boxes'], Settings.model_validate(body.get('settings',{})), body.get('selected',0))
+
+    @app.post('/api/jobs/{identifier}/regenerate')
+    def regenerate(identifier:str, body:dict):
+        return jobs.regenerate(identifier, body['source'], body.get('layout'))
 
     @app.get('/api/jobs')
     def list_jobs(): return jobs.list()
@@ -168,7 +184,7 @@ def create_app(store=None,token=None):
     @app.post('/api/open-output')
     def open_output(body:dict):
         job=jobs.get(body['job'])
-        path=job['output']
+        path=job.get('social_output', job['output']) if body.get('social') else job['output']
         if body.get('source'):
             item=next((i for i in job['items'] if i['id']==body['source']),None)
             path=(item or {}).get('result',{}).get('output',path)

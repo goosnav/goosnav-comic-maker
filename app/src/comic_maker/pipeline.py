@@ -5,11 +5,13 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import tempfile
 from pathlib import Path
 import numpy as np
 from PIL import Image
-from . import imaging, detection, providers, __version__
-from .settings import Settings, Store, atomic_json
+from . import imaging, detection, __version__
+from .settings import Settings, Store, atomic_json, atomic_bytes
 from .detector_base import Box
 
 SUPPORTED={'.png','.jpg','.jpeg','.tif','.tiff','.bmp','.webp','.gif'}
@@ -51,173 +53,241 @@ def validate_output(export_root, sources):
         raise ValueError('Choose a separate export folder that does not contain your originals')
     return target
 
+COORDINATE_VERSION = 1
+SCHEMA_VERSION = 2
+SOCIAL_PHASES = ('regular-carousel', 'stylized-carousel')
+
+def fingerprint(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+
+def correction(source, store, sha=None):
+    sha = sha or digest(source)
+    records = store.read('corrections.json', {})
+    saved = records.get(f'{COORDINATE_VERSION}:{sha}', records.get(source_id(source), {}))
+    if saved.get('source_sha256') == sha and saved.get('coordinate_version') == COORDINATE_VERSION:
+        return saved
+    return {}
+
 def prepare(source, settings, overrides=None):
-    analysis=detection.analyze(imaging.load(source))
-    if overrides:
-        analysis.boxes=detection.validate_boxes(overrides,analysis.image.size)
-        analysis.method='manual';analysis.warnings=[]
-    clean=imaging.ink(analysis.image,settings)
-    panel_width=float(np.median([b.w for b in analysis.boxes]))
-    styled=imaging.paint(clean,settings,panel_width)
-    return analysis,clean,styled,panel_width
+    loaded = imaging.load(source)
+    dpi = imaging.source_dpi(loaded)
+    analysis = detection.analyze(loaded)
+    if overrides is not None:
+        analysis.boxes = detection.validate_boxes(overrides, analysis.image.size)
+        analysis.method = 'manual'
+        analysis.warnings = []
+    clean = imaging.ink(analysis.image, settings)
+    return analysis, clean, dpi
 
-def preview(source,settings,store,overrides=None):
-    fingerprint=digest(source)
-    saved=store.read('corrections.json',{}).get(source_id(source),{})
-    if overrides is None and saved.get('source_sha256')==fingerprint:
-        overrides=saved.get('boxes')
-    analysis,clean,styled,_=prepare(source,settings,overrides)
-    if overrides:
-        corrections=store.read('corrections.json',{})
-        corrections[source_id(source)]={'source_sha256':fingerprint,'boxes':overrides}
-        atomic_json(store.root/'corrections.json',corrections)
-    key=hashlib.sha256((fingerprint+settings.model_dump_json()+json.dumps(overrides)).encode()).hexdigest()[:20]
-    folder=store.root/'previews'/key
-    folder.mkdir(parents=True,exist_ok=True)
-    imaging.save(imaging.thumbnail(analysis.image,1800),folder/'source.png')
-    imaging.save(imaging.thumbnail(styled,1800),folder/'ink.png')
-    imaging.save(styled,folder/'pixels.png')
-    _,summary,layout=imaging.render(styled,analysis.boxes,settings)
-    imaging.save(summary,folder/'summary.png')
-    return {'id':key,'size':list(analysis.image.size),'boxes':[b.as_dict() for b in analysis.boxes],
-            'warnings':analysis.warnings,'method':analysis.method,'layout':layout}
+def preview(source, settings, store, overrides=None):
+    sha = digest(source)
+    key = fingerprint([sha, str(source), settings.ink_strength, settings.cleanup, COORDINATE_VERSION, __version__])[:24]
+    folder = store.root / 'previews' / key
+    meta_path = folder / 'meta.json'
+    meta = store.read(str(meta_path.relative_to(store.root)), {})
+    if not meta or not (folder/'page.png').exists():
+        analysis, clean, dpi = prepare(source, settings)
+        folder.mkdir(parents=True, exist_ok=True)
+        imaging.save(analysis.image, folder/'source.png')
+        imaging.save(clean, folder/'page.png', dpi)
+        meta = {'id': key, 'source': str(source), 'source_sha256': sha, 'coordinate_version': COORDINATE_VERSION,
+                'size': list(clean.size), 'auto_boxes': [b.as_dict() for b in analysis.boxes],
+                'warnings': analysis.warnings, 'method': analysis.method, 'angle': analysis.angle}
+        atomic_json(meta_path, meta)
+    saved = correction(source, store, sha)
+    boxes = overrides if overrides is not None else saved.get('boxes', meta['auto_boxes'])
+    detection.validate_boxes(boxes, meta['size'])
+    return {**meta, 'boxes': boxes, 'warnings': [] if saved or overrides is not None else meta['warnings'], 'settings': settings.model_dump()}
 
-def _export_variant(art,boxes,settings,target,color=False):
-    target.mkdir(parents=True,exist_ok=True)
-    bounds=imaging.crop_bounds(boxes,art.size)
-    comic=art.crop(bounds)
-    if comic.width*comic.height*settings.master_scale**2>imaging.MAX_PIXELS:
-        raise ValueError('Requested master enlargement exceeds 85 megapixels; choose a smaller scale')
-    if settings.master_scale>1:
-        comic=comic.resize((comic.width*settings.master_scale,comic.height*settings.master_scale),Image.Resampling.NEAREST)
-    imaging.save(comic,target/'comic.png')
-    imaging.save(art,target/'source-layout.png')
-    slides,summary,layout=imaging.render(art,boxes,settings,color)
-    for i,slide in enumerate(slides,1): imaging.save(slide,target/f'{i:02d}-panel.png')
-    imaging.save(summary,target/f'{len(slides)+1:02d}-summary.png')
-    imaging.save(summary,target/'summary.png')
-    return layout
+def preview_meta(store, identifier):
+    if not identifier.isalnum():
+        raise ValueError('Invalid preview')
+    meta = store.read(f'previews/{identifier}/meta.json', {})
+    if not meta:
+        raise ValueError('Reopen the panel editor')
+    return meta
 
-def _color_input(clean,boxes):
-    bounds=imaging.crop_bounds(boxes,clean.size)
-    crop=clean.crop(bounds).convert('RGB')
-    # Pad extreme strips instead of stretching or losing panels to model size limits.
-    w,h=crop.size
-    pad_w=max(w,round(h/2.8));pad_h=max(h,round(w/2.8))
-    canvas=Image.new('RGB',(pad_w,pad_h),'white')
-    offset=((pad_w-w)//2,(pad_h-h)//2)
-    canvas.paste(crop,offset)
-    canvas.thumbnail((3840,3840),Image.Resampling.NEAREST)
-    return canvas,bounds,offset,(pad_w,pad_h)
+def save_correction(source, store, identifier, values):
+    meta = preview_meta(store, identifier)
+    if meta['source'] != str(source) or meta['source_sha256'] != digest(source):
+        raise ValueError('The scan changed. Reopen the editor before saving.')
+    boxes = detection.validate_boxes(values, meta['size'])
+    saved = {'source_sha256': meta['source_sha256'], 'coordinate_version': COORDINATE_VERSION,
+             'boxes': [b.as_dict() for b in boxes]}
+    corrections = store.read('corrections.json', {})
+    corrections[f'{COORDINATE_VERSION}:{meta["source_sha256"]}'] = saved
+    atomic_json(store.root/'corrections.json', corrections)
+    return saved
+
+def render_preview(store, identifier, values, settings, selected=0):
+    meta = preview_meta(store, identifier)
+    boxes = detection.validate_boxes(values, meta['size'])
+    selected = max(0, min(int(selected), len(boxes)-1))
+    key = fingerprint([identifier, values, settings.model_dump(), selected, __version__])[:24]
+    folder = store.root/'previews'/key
+    if not (folder/'summary.png').exists():
+        folder.mkdir(parents=True, exist_ok=True)
+        with Image.open(store.root/'previews'/identifier/'page.png') as image:
+            piece = imaging.crop_panel(image, boxes[selected])
+            imaging.save(imaging.thumbnail(piece, 900), folder/'crop.png')
+            imaging.save(imaging.thumbnail(imaging.panel_canvas(piece, settings), 700), folder/'regular.png')
+            imaging.save(imaging.thumbnail(imaging.panel_canvas(piece, settings, True), 700, pixelated=True), folder/'stylized.png')
+            summary, _ = imaging.summary_canvas(image, boxes, settings)
+            imaging.save(imaging.thumbnail(summary, 700), folder/'summary.png')
+    return {'id': key}
+
+def folder_name(name):
+    value = re.sub(r'[^\w .-]', '_', name).strip(' .')[:80] or 'comic'
+    if value.upper().split('.')[0] in {'CON', 'PRN', 'AUX', 'NUL', *(f'COM{i}' for i in range(1,10)), *(f'LPT{i}' for i in range(1,10))}:
+        value = '_' + value
+    return value
+
+def allocate_names(sources):
+    names = []
+    used = {'all-social'}
+    for source in sources:
+        base = folder_name(source.stem)
+        name, n = base, 2
+        while name.casefold() in used:
+            name = f'{base}-{n}'
+            n += 1
+        used.add(name.casefold())
+        names.append(name)
+    return names
+
+def create_run(parent):
+    parent = Path(parent).expanduser().resolve()
+    if parent.is_file():
+        raise ValueError('Choose a destination folder')
+    parent.mkdir(parents=True, exist_ok=True)
+    n = 1
+    while True:
+        root = parent/f'comic-maker-run-{n:03d}'
+        try:
+            root.mkdir()
+            (root/'.comic-maker-export').touch()
+            (root/'all-social').mkdir()
+            return root
+        except FileExistsError:
+            n += 1
+
+def collect_social(root, comic_name, check=lambda: None):
+    """Copies are derived outputs; a retry repairs them without processing images."""
+    target = root/'all-social'
+    target.mkdir(exist_ok=True)
+    prefix = comic_name + '--'
+    expected = {}
+    for phase in SOCIAL_PHASES:
+        for path in sorted((root/comic_name/phase).glob('*.png')):
+            expected[prefix+phase+'--'+path.name] = path
+    for name, path in expected.items():
+        check()
+        dest = target/name
+        if not dest.exists() or digest(dest) != digest(path):
+            atomic_bytes(dest, path.read_bytes())
+    for path in target.iterdir():
+        owned = re.fullmatch(re.escape(prefix) + r'(regular-carousel|stylized-carousel)--\d+-(panel|summary)\.png', path.name)
+        if path.is_file() and owned and path.name not in expected:
+            path.unlink()
+    return {name: digest(target/name) for name in expected}
+
+def _write_print(image, folder, stem, settings, dpi):
+    if settings.master_scale > 1:
+        image = image.resize((image.width*settings.master_scale, image.height*settings.master_scale), Image.Resampling.NEAREST)
+    scaled_dpi = tuple(v*settings.master_scale for v in dpi)
+    for ext in ('png', 'tif'):
+        imaging.save(image, folder/f'{stem}.{ext}', scaled_dpi)
 
 def process(source: Path, export_root: Path, settings: Settings, store: Store,
-            reserve=lambda:None, event=lambda stage:None, check=lambda:None,
-            overrides=None, force=False):
-    export_root=validate_output(export_root,[source])
-    check();event('Reading scan')
-    fingerprint=digest(source)
-    saved=store.read('corrections.json',{}).get(source_id(source),{})
-    if overrides is None and saved.get('source_sha256')==fingerprint:
-        overrides=saved.get('boxes')
-    recipe=hashlib.sha256((fingerprint+str(source.resolve())+settings.model_dump_json()+json.dumps(overrides)+__version__).encode()).hexdigest()
-    slug=re.sub(r'[^\w .-]','_',source.stem).strip(' .')[:80] or 'comic'
-    export_root.mkdir(parents=True,exist_ok=True)
-    (export_root/'.comic-maker-export').touch()
-    target=export_root/f'{slug}--{recipe[:10]}'
-    if force and target.exists():
-        n=2
-        while target.with_name(target.name+f'-{n}').exists(): n+=1
-        target=target.with_name(target.name+f'-{n}')
-    manifest_path=target/'manifest.json'
-    previous={}
-    if manifest_path.exists():
-        try: previous=json.loads(manifest_path.read_text())
-        except (OSError,ValueError): previous={}
-    if previous.get('status')=='complete' and previous.get('files'):
-        if all((target/name).is_file() and digest(target/name)==sha for name,sha in previous['files'].items()):
-            return {**previous,'output':str(target),'cached':True}
-    target.mkdir(parents=True,exist_ok=True)
-    event('Finding panels');check()
-    analysis,clean,art,panel_width=prepare(source,settings,overrides)
-    if analysis.warnings and settings.vision_fallback and not overrides:
-        event('Recovering panels with vision')
-        for attempt in range(settings.ai_attempts):
+            event=lambda stage: None, check=lambda: None, overrides=None, comic_name=None):
+    export_root = validate_output(export_root, [source])
+    imaging.validate_enlargement(source, settings.master_scale)
+    sha = digest(source)
+    if overrides is None:
+        overrides = correction(source, store, sha).get('boxes')
+    target = export_root/(comic_name or folder_name(source.stem))
+    target.mkdir(parents=True, exist_ok=True)
+    manifest_path = target/'manifest.json'
+    try:
+        previous = json.loads(manifest_path.read_text())
+    except (OSError, ValueError):
+        previous = {}
+    check(); event('Cleaning scan')
+    analysis, clean, dpi = prepare(source, settings, overrides)
+    if digest(source) != sha:
+        raise ValueError('The scan changed during processing. Retry with the current scan.')
+    boxes = [b.as_dict() for b in analysis.boxes]
+    page_recipe = fingerprint([sha, settings.ink_strength, settings.cleanup, settings.master_scale, COORDINATE_VERSION, __version__])
+    recipes = {'full-page': page_recipe,
+               'comic-crop': fingerprint([page_recipe, boxes]),
+               'regular-carousel': fingerprint([sha, settings.ink_strength, settings.cleanup, boxes, settings.canvas_width, settings.layout, __version__]),
+               'stylized-carousel': fingerprint([sha, settings.ink_strength, settings.cleanup, boxes, settings.canvas_width, settings.layout, settings.panel_grid_width, settings.summary_grid_width, __version__])}
+    result = {'schema_version': SCHEMA_VERSION, 'recipe_version': SCHEMA_VERSION, 'app_version': __version__, 'source': str(source), 'source_sha256': sha,
+              'coordinate_version': COORDINATE_VERSION, 'settings': settings.model_dump(), 'size': list(clean.size), 'dpi': dpi,
+              'boxes': boxes, 'angle': analysis.angle, 'method': analysis.method, 'panel_count': len(boxes),
+              'warnings': analysis.warnings, 'needs_review': bool(analysis.warnings), 'status': 'partial',
+              'output': str(target), 'stages': {phase:{**previous.get('stages',{}).get(phase,{}), 'status': 'complete' if previous.get('stages',{}).get(phase,{}).get('recipe') == recipe else 'pending'} for phase,recipe in recipes.items()}, 'files': previous.get('files', {}),
+              'social_output': str(export_root/'all-social'), 'layout': imaging.layout_base.choose_layout(analysis.boxes, settings.layout)}
+    def checkpoint():
+        result['files'] = {str(p.relative_to(target)): digest(p) for p in sorted(target.rglob('*'))
+                           if p.is_file() and not any(part.startswith('.') for part in p.relative_to(target).parts) and p.suffix in ('.png','.tif')}
+        atomic_json(manifest_path, result)
+    skipped = 0
+    try:
+        for phase, recipe in recipes.items():
+            check()
+            folder = target/('print' if phase in ('full-page','comic-crop') else phase)
+            backup = target/('.previous-'+phase)
+            if backup.exists():
+                if not folder.exists():
+                    backup.rename(folder)
+                else:
+                    shutil.rmtree(backup)
+            old = result['stages'].get(phase, {})
+            if old.get('recipe') == recipe and old.get('files') and all((target/name).is_file() and digest(target/name) == value for name,value in old['files'].items()):
+                skipped += 1
+                continue
+            event({'full-page':'Exporting print page','comic-crop':'Exporting print crop','regular-carousel':'Making regular carousel','stylized-carousel':'Making stylized carousel'}[phase])
+            temporary = Path(tempfile.mkdtemp(prefix='.working-', dir=target))
             try:
+                if phase == 'full-page':
+                    _write_print(clean, temporary, 'full-page', settings, dpi)
+                elif phase == 'comic-crop':
+                    _write_print(clean.crop(imaging.crop_bounds(analysis.boxes, clean.size)), temporary, 'comic', settings, dpi)
+                else:
+                    styled = phase == 'stylized-carousel'
+                    for i, box in enumerate(analysis.boxes, 1):
+                        check()
+                        imaging.save(imaging.panel_canvas(imaging.crop_panel(clean, box), settings, styled), temporary/f'{i:02d}-panel.png')
+                    summary, layout = imaging.summary_canvas(clean, analysis.boxes, settings, styled)
+                    result['layout'] = layout
+                    imaging.save(summary, temporary/f'{len(boxes)+1:02d}-summary.png')
                 check()
-                values=providers.vision_boxes(analysis.image,settings,store.key('openai'),reserve)
-                analysis.boxes=detection.validate_boxes(values,analysis.image.size)
-                analysis.method='vision estimate'
-                analysis.warnings=['Panel boundaries were estimated by AI; check crops if needed.']
-                panel_width=float(np.median([b.w for b in analysis.boxes]))
-                art=imaging.paint(clean,settings,panel_width)
-                break
-            except providers.ProviderFailure as exc:
-                if providers.transient(exc) and attempt+1<settings.ai_attempts:
-                    providers.backoff(attempt);continue
-                analysis.warnings.append(str(exc));break
-            except ValueError:
-                if attempt+1==settings.ai_attempts:
-                    analysis.warnings.append('Vision estimates were invalid; used local estimates.')
-    check();event('Exporting black & white')
-    layout=_export_variant(art,analysis.boxes,settings,target/'bw')
-    result={'schema_version':1,'app_version':__version__,'source':str(source),'source_sha256':fingerprint,
-            'recipe':recipe,'settings':settings.model_dump(),'size':list(art.size), 'boxes':[b.as_dict() for b in analysis.boxes],
-            'angle':analysis.angle,'method':analysis.method,'layout':layout,'panel_count':len(analysis.boxes),
-            'warnings':analysis.warnings,'status':'bw_ready','fixture':settings.provider=='fixture' and settings.colorize,
-            'color_status':'off','output':str(target)}
-    atomic_json(manifest_path,result)
-    input_color=settings.input_mode=='color' or (settings.input_mode=='auto' and imaging.has_color(analysis.image.crop(imaging.crop_bounds(analysis.boxes,analysis.image.size))))
-    if input_color:
-        check();event('Cleaning original colors')
-        original_color=imaging.flat_color(analysis.image,settings.palette_colors)
-        styled=imaging.paint(original_color,settings,panel_width,True)
-        _export_variant(styled,analysis.boxes,settings,target/'color',True)
-        result['color_status']='original';result['color_folder']='color'
-    elif settings.colorize:
-        check();event('Colorizing · beta' if settings.provider!='fixture' else 'Colorizing · FIXTURE')
-        try:
-            model_input,bounds,offset,pad_size=_color_input(clean,analysis.boxes)
-            raw_path=target/'color'/'provider-output.png'
-            best=None;best_score=-1
-            # A saved response is a checkpoint: restart does not purchase it again.
-            checkpoint=raw_path if raw_path.exists() else target/'color'/'best-attempt.png'
-            had_checkpoint=checkpoint.exists()
-            attempts=1 if had_checkpoint else settings.ai_attempts
-            for attempt in range(attempts):
-                check()
-                try:
-                    generated=imaging.load(checkpoint) if had_checkpoint else providers.request_color(model_input,settings,store.key(settings.provider),reserve,correction=attempt>0)
-                    report=providers.fidelity(model_input,generated)
-                    if report['line_recall']>best_score:
-                        best,best_score=generated,report['line_recall'];best_report=report
-                        imaging.save(generated,target/'color'/'best-attempt.png')
-                    if not report['suspect'] or settings.provider=='fixture': break
-                except providers.ProviderFailure as exc:
-                    if providers.transient(exc) and attempt+1<attempts:
-                        providers.backoff(attempt);continue
-                    if best is None: raise
-                    result['warnings'].append(str(exc));break
-            if best is None: raise providers.ProviderFailure('No usable color image returned')
-            imaging.save(best,raw_path)
-            result['color_check']=best_report
-            if best_report['suspect']:
-                result['warnings'].append('Color beta: possible drawing changes detected. Black-and-white exports are unaffected.')
-            check();event('Flattening color & exporting')
-            # Normalize provider dimensions once, then quantize; never multiply in original ink.
-            paletted=imaging.flat_color(best,settings.palette_colors)
-            scaled=imaging.hard_resize(paletted,pad_size,True,paletted)
-            x0,y0,x1,y1=bounds;ox,oy=offset
-            cropped=scaled.crop((ox,oy,ox+x1-x0,oy+y1-y0))
-            full=Image.new('RGB',clean.size,'white');full.paste(cropped,(x0,y0))
-            full=full.quantize(palette=paletted,dither=Image.Dither.NONE)
-            styled=imaging.paint(full,settings,panel_width,True)
-            color_folder=target/('color-draft' if best_report['suspect'] else 'color')
-            _export_variant(styled,analysis.boxes,settings,color_folder,True)
-            result['color_status']='draft' if best_report['suspect'] else 'fixture' if settings.provider=='fixture' else 'beta'
-            result['color_folder']=color_folder.name
-        except (providers.ProviderFailure,ValueError,OSError) as exc:
-            result['color_status']='failed';result['warnings'].append(f'Colorization: {exc}')
-    result['status']='complete' if result['color_status']!='failed' else 'partial'
-    result['files']={str(p.relative_to(target)):digest(p) for p in sorted(target.rglob('*.png'))}
-    atomic_json(manifest_path,result)
-    return result
+                if phase in ('full-page','comic-crop'):
+                    folder.mkdir(exist_ok=True)
+                    names = [p.name for p in temporary.iterdir()]
+                    for p in temporary.iterdir():
+                        os.replace(p, folder/p.name)
+                else:
+                    names = [p.name for p in temporary.iterdir()]
+                    if folder.exists():
+                        folder.rename(backup)
+                    temporary.rename(folder)
+                    if backup.exists():
+                        shutil.rmtree(backup)
+                result['stages'][phase] = {'status':'complete', 'recipe':recipe, 'files': {str((folder/name).relative_to(target)):digest(folder/name) for name in names}}
+                checkpoint()
+            finally:
+                if temporary.exists():
+                    shutil.rmtree(temporary)
+        check(); event('Collecting social slides')
+        result['social_files'] = collect_social(export_root, target.name, check)
+        result['status'] = 'complete'
+        result['cached'] = skipped == len(recipes)
+        result.pop('error', None)
+        checkpoint()
+        return result
+    except Exception as exc:
+        result['error'] = str(exc)
+        checkpoint()
+        raise

@@ -7,7 +7,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from . import pipeline, providers
+from . import pipeline, imaging
 from .settings import Settings, atomic_json
 
 class Cancelled(Exception):
@@ -26,6 +26,13 @@ class Jobs:
         self.db.commit()
         for job in reversed(self.list()):
             if job['status'] in ('running','queued'):
+                if job.get('schema_version') != 2:
+                    job['status'] = 'partial'
+                    for item in job['items']:
+                        if item['status'] in ('running','queued'):
+                            item['status'] = 'failed'; item['error'] = 'Import this comic for the new export workflow'
+                    self.save(job)
+                    continue
                 for item in job['items']:
                     if item['status']=='running': item['status']='queued'
                 job['status']='queued';self.save(job);self.pool.submit(self.run,job['id'])
@@ -62,15 +69,45 @@ class Jobs:
         if not row: raise ValueError('Import this source first')
         return Path(row[0])
 
-    def start(self,identifiers,output,settings,overrides=None,force=False):
-        if not identifiers: raise ValueError('Choose at least one comic')
-        paths=[self.source(i) for i in dict.fromkeys(identifiers)]
-        target=pipeline.validate_output(output,paths)
-        target.mkdir(parents=True,exist_ok=True)
-        job={'id':uuid.uuid4().hex[:16],'created':time.time(),'status':'queued','output':str(target),
-            'settings':settings.model_dump(),'cancel_requested':False,'calls':0,'force':force,
-            'items':[{'id':pipeline.source_id(p),'source':str(p),'name':p.name,'status':'queued','stage':'Waiting','boxes':(overrides or {}).get(pipeline.source_id(p))} for p in paths]}
-        self.save(job);self.pool.submit(self.run,job['id'])
+    def start(self, identifiers, output, settings):
+        if not identifiers:
+            raise ValueError('Choose at least one comic')
+        paths = [self.source(i) for i in dict.fromkeys(identifiers)]
+        for path in paths:
+            try:
+                imaging.validate_enlargement(path, settings.master_scale)
+            except OSError:
+                pass  # An unreadable comic fails in the queue without blocking the others.
+        target = pipeline.create_run(output)
+        names = pipeline.allocate_names(paths)
+        job = {'id': uuid.uuid4().hex[:16], 'schema_version': 2, 'created': time.time(), 'status': 'queued',
+               'output': str(target), 'social_output': str(target/'all-social'), 'settings': settings.model_dump(),
+               'cancel_requested': False, 'items': [
+                   {'id': pipeline.source_id(p), 'source': str(p), 'name': p.name, 'folder': name,
+                    'status': 'queued', 'stage': 'Waiting'} for p,name in zip(paths,names)]}
+        self.save(job)
+        self.pool.submit(self.run, job['id'])
+        return job
+
+    def regenerate(self, identifier, source_identifier, layout=None):
+        with self.lock:
+            job = self.get(identifier)
+            if job.get('schema_version') != 2:
+                raise ValueError('Import this comic to create a new run; older exports remain unchanged')
+            if job['status'] in ('queued','running'):
+                raise ValueError('Wait for this batch to finish before updating its exports')
+            item = next((i for i in job['items'] if i['id'] == source_identifier), None)
+            if not item:
+                raise ValueError('Comic not found in this batch')
+            if layout is not None:
+                item['layout'] = Settings(layout=layout).layout
+            item['status'] = 'queued'
+            item['stage'] = 'Waiting'
+            item.pop('boxes', None)
+            job['cancel_requested'] = False
+            job['status'] = 'queued'
+            self.save(job)
+        self.pool.submit(self.run, identifier)
         return job
 
     def cancel(self,identifier):
@@ -81,6 +118,7 @@ class Jobs:
     def resume(self,identifier):
         with self.lock:
             job=self.get(identifier)
+            if job.get('schema_version') != 2: raise ValueError('Import the originals for the new export workflow')
             if job['status'] in ('running','queued'): raise ValueError('Batch is already running')
             job['cancel_requested']=False;job['status']='queued'
             for item in job['items']:
@@ -98,11 +136,6 @@ class Jobs:
                 current=self.get(identifier)
                 job['cancel_requested']=current['cancel_requested']
                 self.save(job)
-        def reserve():
-            check()
-            if job['calls']>=settings.ai_call_limit:
-                raise providers.ProviderFailure('Batch AI call limit reached; local exports remain available')
-            job['calls']+=1;persist()
         job['status']='running';persist()
         try:
             for item in job['items']:
@@ -112,14 +145,23 @@ class Jobs:
                     def event(stage):
                         item['stage']=stage;persist()
                     with self.image_lock:
-                        result=pipeline.process(Path(item['source']),Path(job['output']),settings,self.store,reserve,event,check,item.get('boxes'),job['force'])
+                        item_settings = settings.model_copy(update={'layout':item.get('layout', settings.layout)})
+                        result=pipeline.process(Path(item['source']),Path(job['output']),item_settings,self.store,event,check,comic_name=item.get('folder'))
                     item['result']=result
+                    item.pop('error', None)
                     item['status']='partial' if result['status']=='partial' else 'warning' if result['warnings'] else 'complete'
                     item['stage']='Already exported' if result.get('cached') else 'Exported'
                 except Cancelled:
                     item['status']='cancelled';item['stage']='Stopped';persist();break
                 except Exception as exc:
                     item['status']='failed';item['stage']='Could not export';item['error']=f'{type(exc).__name__}: {exc}'
+                    manifest = Path(job['output'])/item.get('folder', pipeline.folder_name(Path(item['source']).stem))/'manifest.json'
+                    if manifest.exists():
+                        try:
+                            item['result'] = json.loads(manifest.read_text())
+                            item['status'] = 'partial'
+                        except (OSError,ValueError):
+                            pass
                 persist()
             for item in job['items']:
                 if item['status']=='queued' and self.get(identifier)['cancel_requested']:
