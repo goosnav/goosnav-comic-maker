@@ -68,8 +68,8 @@ def main():
                 pass
         root = pipeline.create_run(args.out) if files else None
         results=[]
-        for path,name in zip(files,pipeline.allocate_names(files)):
-            try: results.append(pipeline.process(path,root,settings,store,comic_name=name))
+        for number,(path,name) in enumerate(zip(files,pipeline.allocate_names(files)),1):
+            try: results.append(pipeline.process(path,root,settings,store,comic_name=name,number=number))
             except Exception as exc: results.append({'source':str(path),'status':'failed','error':str(exc)})
         report={'results':results,'warnings':warnings,'output':str(root) if root else None}
         if args.json: print(json.dumps(report))

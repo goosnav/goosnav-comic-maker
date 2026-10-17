@@ -58,7 +58,7 @@ class Jobs:
             if result.get('schema_version') != 2:
                 continue
             result.update(pipeline.collect_prints(root, item['folder']))
-            if (root/item['folder']/'stylized-carousel').is_dir():
+            if any((root/item['folder']).glob('stylized-carousel*/')):
                 result['social_files'] = pipeline.collect_social(root, item['folder'])
             atomic_json(root/item['folder']/'manifest.json', result)
         job['collection_version'] = 1
@@ -107,6 +107,8 @@ class Jobs:
                 imaging.validate_enlargement(path, settings.master_scale)
             except OSError:
                 pass  # An unreadable comic fails in the queue without blocking the others.
+        if settings.lines_file:
+            pipeline.read_lines(settings.lines_file)
         target = pipeline.create_run(output)
         names = pipeline.allocate_names(paths)
         job = {'id': uuid.uuid4().hex[:16], 'schema_version': 2, 'created': time.time(), 'status': 'queued',
@@ -170,7 +172,7 @@ class Jobs:
                 self.save(job)
         job['status']='running';persist()
         try:
-            for item in job['items']:
+            for number,item in enumerate(job['items'],1):
                 try:
                     if item['status'] in ('complete','warning'):
                         result = item.get('result', {})
@@ -185,7 +187,7 @@ class Jobs:
                         item['stage']=stage;persist()
                     with self.image_lock:
                         item_settings = settings.model_copy(update={'layout':item.get('layout', settings.layout)})
-                        result=pipeline.process(Path(item['source']),Path(job['output']),item_settings,self.store,event,check,comic_name=item.get('folder'))
+                        result=pipeline.process(Path(item['source']),Path(job['output']),item_settings,self.store,event,check,comic_name=item.get('folder'),number=number)
                     item['result']=result
                     item.pop('error', None)
                     item['status']='partial' if result['status']=='partial' else 'warning' if result['warnings'] else 'complete'

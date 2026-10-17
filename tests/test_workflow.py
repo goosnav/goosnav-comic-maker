@@ -46,7 +46,7 @@ def test_exports_resolution_dpi_modes_source_and_collection(tmp_path):
         with Image.open(root/'scan'/'print'/f'comic.{ext}') as image:
             assert image.width<1200 and image.height<800
     for phase in pipeline.SOCIAL_PHASES:
-        names=sorted((root/'scan'/phase).glob('*.png'))
+        names=sorted((root/'scan'/(phase+'-01' if phase=='stylized-carousel' else phase)).glob('*.png'))
         assert [p.name for p in names]==['01-panel.png','02-panel.png','03-summary.png']
         for p in names:
             with Image.open(p) as image:
@@ -188,7 +188,7 @@ def test_stage_hashes_repair_only_damaged_files(tmp_path):
     first=pipeline.process(source,root,Settings(),store)
     assert pipeline.process(source,root,Settings(),store)['cached']
     page=root/'scan/print/full-page.png';mtime=page.stat().st_mtime_ns
-    damaged=root/'scan/stylized-carousel/01-panel.png';damaged.write_bytes(b'broken')
+    damaged=root/'scan/stylized-carousel-01/01-panel.png';damaged.write_bytes(b'broken')
     repaired=pipeline.process(source,root,Settings(),store)
     assert not repaired['cached'] and page.stat().st_mtime_ns==mtime
     with Image.open(damaged) as image:assert image.size==(2160,2700)
@@ -370,3 +370,20 @@ def test_supplied_raw_scan_panel_counts(name,count):
     if not source.exists():pytest.skip('Private artist fixtures not present')
     result=detection.analyze(imaging.load(source))
     assert len(result.boxes)==count and not result.warnings
+
+
+def test_stylized_folders_are_numbered_and_get_a_random_caption(tmp_path):
+    lines=tmp_path/'lines.txt';lines.write_text('\nfirst line\n  second line  \n\nthird line\n')
+    store=Store(tmp_path/'state');root=pipeline.create_run(tmp_path/'out');settings=Settings(lines_file=str(lines))
+    for number in (1,2):
+        source=tmp_path/f'scan{number}.png';drawing(source)
+        result=pipeline.process(source,root,settings,store,number=number)
+        folder=root/f'scan{number}'/f'stylized-carousel-{number:02d}'
+        assert (folder/'01-panel.png').is_file() and not (root/f'scan{number}/stylized-carousel').exists()
+        assert (folder/'caption.txt').read_text().strip() in ('first line','second line','third line')
+        assert not list(folder.glob('*/'))
+        assert pipeline.process(source,root,settings,store,number=number)['cached']
+    assert len(list((root/'all-social').glob('*.png')))==6
+    plain=pipeline.process(tmp_path/'scan1.png',pipeline.create_run(tmp_path/'out'),Settings(),store)
+    assert not list(Path(plain['output']).glob('stylized-carousel*/caption.txt'))
+    with pytest.raises(ValueError):pipeline.read_lines(tmp_path/'missing.txt')

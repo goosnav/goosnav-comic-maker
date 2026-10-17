@@ -7,7 +7,7 @@ Double-click **run.command** on macOS, or run `./run.sh`. First launch needs uv 
 ## Daily use
 
 1. **Choose folder** or **Choose files**. Set **Include subfolders** as needed. You can also paste paths.
-2. Choose a destination and press **Process comics**.
+2. Check the destination and press **Process comics**. It defaults to the first folder you choose (or the folder holding the first file), so the numbered run lands inside it. Choosing a destination yourself overrides this.
 3. Use **Open exports**, **Open all social**, **Open book prints**, or **Open processed pages** to collect the results.
 
 Each batch creates a new numbered run. Failed comics do not stop the others. Estimated boundaries export with a **Needs review** flag. Refreshing the browser does not interrupt a batch; restarting the app resumes interrupted work. **Stop** takes effect between processing operations. **Retry unfinished** preserves completed stages whose output hashes still match.
@@ -18,6 +18,8 @@ Each batch creates a new numbered run. Failed comics do not stop the others. Est
 - **DPI:** preserve source DPI, or use 600 when missing. Optional integer print enlargement increases DPI proportionally, preserving physical print size. It enlarges existing pixels; it cannot reconstruct missing scan detail.
 - **Regular carousel:** one 2160 × 2700 slide per panel, followed by a summary. High-quality resizing retains fine strokes.
 - **Stylized carousel:** Red Sun black-and-white processing applied separately to full-resolution cleaned panel crops. Defaults are 512 pixels across each panel's artwork and 1024 across each summary panel's artwork. Final fitting uses nearest-neighbor resizing without dithering or gray fringes.
+
+**Caption lines:** pick a .txt file on the main screen (remembered between launches). Each stylized carousel folder gets a `caption.txt` holding one randomly chosen non-blank line from it. The folder number (`stylized-carousel-01`, `-02`, …) is the comic's position in the run. Leave the field blank to skip captions.
 
 Occasional controls live in **Settings**: ink strength, dust removal, print enlargement, the two artwork grid widths, and filename filtering. Leave a grid width blank to keep native pixels before fitting. Print masters always use the full-resolution cleanup, independent of stylization.
 
@@ -51,10 +53,11 @@ comic-maker-run-001/
       01-panel.png
       02-panel.png
       03-summary.png
-    stylized-carousel/
+    stylized-carousel-01/
       01-panel.png
       02-panel.png
       03-summary.png
+      caption.txt
     manifest.json
   Comic A-2/
     ...

@@ -18,6 +18,7 @@ class Settings(BaseModel):
     layout: Literal['auto', 'as-drawn', 'stack', 'grid', 'one-over-two'] = 'auto'
     recursive: bool = True
     pattern: str = '*'
+    lines_file: str = ''
 
 def data_root() -> Path:
     if os.environ.get('COMIC_MAKER_DATA'):

@@ -4,6 +4,7 @@ import fnmatch
 import hashlib
 import json
 import os
+import random
 import re
 import shutil
 import tempfile
@@ -180,6 +181,22 @@ def create_run(parent):
         except FileExistsError:
             n += 1
 
+def read_lines(path):
+    """Non-blank lines of the caption source; a chosen file must be usable."""
+    try:
+        lines = [v.strip() for v in Path(path).expanduser().read_text(encoding='utf-8-sig', errors='replace').splitlines()]
+    except OSError as exc:
+        raise ValueError(f'Could not read the caption file: {exc}')
+    lines = [v for v in lines if v]
+    if not lines:
+        raise ValueError('The caption file has no text lines')
+    return lines
+
+def stylized_folder(target, number):
+    """Numbered per comic; an existing folder (retry, older run) keeps its name."""
+    found = sorted(p.name for p in target.glob('stylized-carousel*') if p.is_dir())
+    return found[0] if found else f'stylized-carousel-{number:02d}'
+
 def _collect_files(target, expected, owned_pattern, check):
     """Copies are derived outputs; a retry repairs them without processing images."""
     target.mkdir(exist_ok=True)
@@ -197,7 +214,7 @@ def _collect_files(target, expected, owned_pattern, check):
 def collect_social(root, comic_name, check=lambda: None):
     prefix = comic_name + '--'
     expected = {prefix+'stylized-carousel--'+path.name: path
-                for path in sorted((root/comic_name/'stylized-carousel').glob('*.png'))}
+                for path in sorted((root/comic_name).glob('stylized-carousel*/*.png'))}
     return _collect_files(root/'all-social', expected,
                           re.escape(prefix) + r'(regular-carousel|stylized-carousel)--\d+-(panel|summary)\.png', check)
 
@@ -223,7 +240,7 @@ def _write_print(image, folder, stem, settings, dpi):
         imaging.save(image, folder/f'{stem}.{ext}', scaled_dpi)
 
 def process(source: Path, export_root: Path, settings: Settings, store: Store,
-            event=lambda stage: None, check=lambda: None, overrides=None, comic_name=None):
+            event=lambda stage: None, check=lambda: None, overrides=None, comic_name=None, number=1):
     export_root = validate_output(export_root, [source])
     imaging.validate_enlargement(source, settings.master_scale)
     sha = digest(source)
@@ -261,7 +278,7 @@ def process(source: Path, export_root: Path, settings: Settings, store: Store,
     try:
         for phase, recipe in recipes.items():
             check()
-            folder = target/('print' if phase in ('full-page','comic-crop') else phase)
+            folder = target/('print' if phase in ('full-page','comic-crop') else stylized_folder(target, number) if phase == 'stylized-carousel' else phase)
             backup = target/('.previous-'+phase)
             if backup.exists():
                 if not folder.exists():
@@ -290,6 +307,8 @@ def process(source: Path, export_root: Path, settings: Settings, store: Store,
                     summary, layout = imaging.summary_canvas(clean, analysis.boxes, settings, styled)
                     result['layout'] = layout
                     imaging.save(summary, temporary/f'{len(boxes)+1:02d}-summary.png')
+                    if styled and settings.lines_file:
+                        (temporary/'caption.txt').write_text(random.choice(read_lines(settings.lines_file))+'\n', encoding='utf-8')
                 check()
                 if phase in ('full-page','comic-crop'):
                     folder.mkdir(exist_ok=True)

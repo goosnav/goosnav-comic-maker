@@ -109,7 +109,9 @@ def create_app(store=None,token=None):
         sources=jobs.register(files)
         previous_session=store.read('session.json',{})
         atomic_json(store.root/'session.json',{'paths':paths,'sources':sources,'output':body.get('destination',body.get('output',previous_session.get('output','')))})
-        return {'sources':sources,'warnings':warnings}
+        first=Path(paths[0]).expanduser() if paths else None
+        default_output=str(first if first.is_dir() else first.parent) if first and first.exists() else None
+        return {'sources':sources,'warnings':warnings,'default_output':default_output}
 
     @app.get('/api/source/{identifier}')
     def source_image(identifier:str):
