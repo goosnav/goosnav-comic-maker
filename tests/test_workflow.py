@@ -54,9 +54,17 @@ def test_exports_resolution_dpi_modes_source_and_collection(tmp_path):
                 if phase=='stylized-carousel':assert image.mode=='1'
     with Image.open(root/'scan'/'regular-carousel'/'01-panel.png') as image:
         assert image.mode=='L' and len(image.getcolors(256))>2
-    assert len(result['social_files'])==6
+    assert len(result['social_files'])==3
     for name in result['social_files']:
+        assert '--stylized-carousel--' in name
         assert pipeline.digest(root/'all-social'/name)==result['social_files'][name]
+    for phase, (folder, stem, prefix) in pipeline.PRINT_COLLECTIONS.items():
+        assert result[prefix+'_output']==str(root/folder)
+        assert len(result[prefix+'_files'])==2
+        for ext in ('png','tif'):
+            name=f'scan--{stem}.{ext}'
+            assert pipeline.digest(root/folder/name)==pipeline.digest(root/'scan/print'/f'{stem}.{ext}')
+            assert result[prefix+'_files'][name]==pipeline.digest(root/folder/name)
     assert pipeline.digest(source)==before
 
 
@@ -156,14 +164,20 @@ def test_regeneration_reuses_page_updates_collected_files_and_removes_old_slides
         row=jobs.register([source])[0];job=jobs.start([row['id']],tmp_path/'out',Settings())
         job=wait_job(jobs,job['id']);result=job['items'][0]['result'];target=Path(result['output'])
         page=target/'print/full-page.png';before=(pipeline.digest(page),page.stat().st_mtime_ns)
+        collected_page=Path(job['processed_page_output'])/'scan--full-page.png'
+        page_copy_before=(pipeline.digest(collected_page),collected_page.stat().st_mtime_ns)
+        crop_copy=Path(job['book_print_output'])/'scan--comic.png';crop_before=pipeline.digest(crop_copy)
         meta=pipeline.preview(source,Settings(),store)
         pipeline.save_correction(source,store,meta['id'],[{'x':90,'y':110,'w':450,'h':580}])
         jobs.regenerate(job['id'],row['id'],'stack');updated=wait_job(jobs,job['id'])
         assert updated['status']=='complete' and updated['output']==job['output']
         assert updated['items'][0]['result']['panel_count']==1
         assert before==(pipeline.digest(page),page.stat().st_mtime_ns)
+        assert page_copy_before==(pipeline.digest(collected_page),collected_page.stat().st_mtime_ns)
+        assert pipeline.digest(crop_copy)!=crop_before
+        assert pipeline.digest(crop_copy)==pipeline.digest(target/'print/comic.png')
         assert not (target/'regular-carousel/03-summary.png').exists()
-        assert len(list(Path(job['social_output']).glob('*.png')))==4
+        assert len(list(Path(job['social_output']).glob('*.png')))==2
         for path in Path(job['social_output']).glob('*.png'):
             assert pipeline.digest(path)==updated['items'][0]['result']['social_files'][path.name]
     finally:jobs.close()
@@ -179,16 +193,24 @@ def test_stage_hashes_repair_only_damaged_files(tmp_path):
     assert not repaired['cached'] and page.stat().st_mtime_ns==mtime
     with Image.open(damaged) as image:assert image.size==(2160,2700)
     social=root/'all-social'/next(iter(repaired['social_files']));social.write_bytes(b'broken')
+    old_copy=root/'all-social/scan--regular-carousel--01-panel.png'
+    old_copy.write_bytes((root/'scan/regular-carousel/01-panel.png').read_bytes())
     assert pipeline.process(source,root,Settings(),store)['cached']
     assert pipeline.digest(social)==repaired['social_files'][social.name]
+    assert not old_copy.exists()
     assert pipeline.process(source,root,Settings(),store)['layout']==first['layout']
+    for folder, stem, prefix in pipeline.PRINT_COLLECTIONS.values():
+        copied=root/folder/f'scan--{stem}.tif';copied.write_bytes(b'broken')
+    assert pipeline.process(source,root,Settings(),store)['cached']
+    for folder, stem, prefix in pipeline.PRINT_COLLECTIONS.values():
+        assert pipeline.digest(root/folder/f'scan--{stem}.tif')==pipeline.digest(root/'scan/print'/f'{stem}.tif')
 
 
 def test_uncertain_comic_exports_and_is_flagged(tmp_path):
     source=tmp_path/'uncertain.png';Image.new('RGB',(320,200),'white').save(source)
     result=pipeline.process(source,pipeline.create_run(tmp_path/'out'),Settings(),Store(tmp_path/'state'))
     assert result['status']=='complete' and result['needs_review'] and result['warnings']
-    assert result['panel_count']==1 and len(result['social_files'])==4
+    assert result['panel_count']==1 and len(result['social_files'])==2
 
 
 def test_duplicate_names_get_distinct_collected_copies(tmp_path):
@@ -201,9 +223,36 @@ def test_duplicate_names_get_distinct_collected_copies(tmp_path):
         completed=wait_job(jobs,job['id'])
         assert completed['status']=='complete'
         assert [i['folder'] for i in completed['items']]==['Comic A','Comic A-2']
-        social=Path(job['social_output']);assert len(list(social.glob('*.png')))==12
+        social=Path(job['social_output']);assert len(list(social.glob('*.png')))==6
         for item in completed['items']:
             for name,value in item['result']['social_files'].items():assert pipeline.digest(social/name)==value
+        for folder, stem, prefix in pipeline.PRINT_COLLECTIONS.values():
+            assert len(list((Path(job['output'])/folder).iterdir()))==4
+        # Regenerating an older run backfills every comic's print collections.
+        import shutil
+        untouched=Path(completed['items'][1]['result']['output'])/'print/full-page.png'
+        untouched_mtime=untouched.stat().st_mtime_ns
+        for folder, stem, prefix in pipeline.PRINT_COLLECTIONS.values():
+            shutil.rmtree(Path(job['output'])/folder)
+            completed.pop(prefix+'_output',None)
+        completed.pop('collection_version', None)
+        old_copy=social/'Comic A--regular-carousel--01-panel.png'
+        old_copy.write_bytes((Path(completed['items'][0]['result']['output'])/'regular-carousel/01-panel.png').read_bytes())
+        jobs.save(completed);jobs.close()
+        jobs=Jobs(Store(tmp_path/'state'))
+        reopened=jobs.get(job['id'])
+        assert reopened['collection_version']==1 and not old_copy.exists()
+        assert untouched.stat().st_mtime_ns==untouched_mtime
+        for folder, stem, prefix in pipeline.PRINT_COLLECTIONS.values():
+            assert len(list((Path(job['output'])/folder).iterdir()))==4
+            assert reopened[prefix+'_output']==str(Path(job['output'])/folder)
+        jobs.regenerate(job['id'],rows[0]['id']);updated=wait_job(jobs,job['id'])
+        assert updated['status']=='complete' and untouched.stat().st_mtime_ns==untouched_mtime
+        for folder, stem, prefix in pipeline.PRINT_COLLECTIONS.values():
+            assert len(list((Path(job['output'])/folder).iterdir()))==4
+            for item in updated['items']:
+                for name,value in item['result'][prefix+'_files'].items():
+                    assert pipeline.digest(Path(updated[prefix+'_output'])/name)==value
     finally:jobs.close()
 
 
@@ -217,6 +266,12 @@ def test_failed_regeneration_keeps_previous_phase(tmp_path,monkeypatch):
     monkeypatch.setattr(imaging,'panel_canvas',fail)
     with pytest.raises(OSError):pipeline.process(source,root,Settings(panel_grid_width=256),store)
     for name,value in first['stages']['stylized-carousel']['files'].items():assert pipeline.digest(root/'scan'/name)==value
+    new_root=pipeline.create_run(tmp_path/'out')
+    with pytest.raises(OSError):pipeline.process(source,new_root,Settings(),store)
+    partial=json.loads((new_root/'scan/manifest.json').read_text())
+    for folder, stem, prefix in pipeline.PRINT_COLLECTIONS.values():
+        assert len(partial[prefix+'_files'])==2
+        assert len(list((new_root/folder).iterdir()))==2
 
 
 def test_run_names_discovery_and_duplicate_names(tmp_path):
@@ -225,6 +280,7 @@ def test_run_names_discovery_and_duplicate_names(tmp_path):
     paths=[tmp_path/'one/scan.png',tmp_path/'two/scan.png']
     assert pipeline.allocate_names(paths)==['scan','scan-2']
     assert pipeline.allocate_names([Path('all-social.png'),Path('ALL-SOCIAL.png')])==['all-social-2','ALL-SOCIAL-3']
+    assert pipeline.allocate_names([Path('all-book-prints.png'),Path('all-processed-pages.png')])==['all-book-prints-2','all-processed-pages-2']
     root=pipeline.create_run(tmp_path);drawing(root/'export.png')
     assert pipeline.create_run(tmp_path).name=='comic-maker-run-002'
     discovered,_=pipeline.discover([str(tmp_path)],Settings())
@@ -263,7 +319,7 @@ def test_interrupted_queue_recovers_without_creating_another_run(tmp_path):
     assert len(list((tmp_path/'out').glob('comic-maker-run-*')))==1;jobs.close()
 
 
-def test_http_correction_preview_regeneration_and_guards(tmp_path):
+def test_http_correction_preview_regeneration_and_guards(tmp_path,monkeypatch):
     source=tmp_path/'scan.png';drawing(source);app=create_app(Store(tmp_path/'state'),'test-session')
     with TestClient(app) as client:
         headers={'x-session':'test-session'}
@@ -279,6 +335,11 @@ def test_http_correction_preview_regeneration_and_guards(tmp_path):
         assert client.post('/api/corrections/'+imported['id'],headers=headers,json={'preview':meta['id'],'boxes':boxes}).status_code==200
         job=client.post('/api/jobs',headers=headers,json={'ids':[imported['id']],'output':str(tmp_path/'out')}).json()
         result=wait_job(app.state.jobs,job['id']);assert result['items'][0]['result']['panel_count']==1
+        opened=[]
+        monkeypatch.setattr('comic_maker.server.subprocess.Popen',lambda command,**kwargs:opened.append(command[-1]))
+        for collection,key in [('book-prints','book_print_output'),('processed-pages','processed_page_output')]:
+            assert client.post('/api/open-output',headers=headers,json={'job':job['id'],'collection':collection}).status_code==200
+            assert opened[-1]==job[key]
         artifact=f'/api/artifact/{job["id"]}/{imported["id"]}/print/full-page.tif'
         assert client.get(artifact).status_code==200
         assert client.get(f'/api/artifact/{job["id"]}/{imported["id"]}/../../secret').status_code==404

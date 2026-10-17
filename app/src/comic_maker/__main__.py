@@ -7,9 +7,45 @@ import threading
 import time
 import webbrowser
 import os
+import hashlib
+import re
+import urllib.request
 from pathlib import Path
 from .settings import Store, Settings, atomic_json
 from . import pipeline
+
+def code_revision():
+    root = Path(__file__).resolve().parents[2]
+    files = sorted((root/'src/comic_maker').glob('*.py')) + sorted((root/'static').glob('*'))
+    digest = hashlib.sha256()
+    for path in files:
+        if path.is_file():
+            digest.update(str(path.relative_to(root)).encode())
+            digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+def lock_instance(lease):
+    if os.name == 'nt':
+        import msvcrt
+        lease.seek(0);lease.write(b'0');lease.flush();lease.seek(0)
+        msvcrt.locking(lease.fileno(),msvcrt.LK_NBLCK,1)
+    else:
+        import fcntl
+        fcntl.flock(lease.fileno(),fcntl.LOCK_EX|fcntl.LOCK_NB)
+
+def stop_idle_instance(url):
+    with urllib.request.urlopen(url+'/api/state', timeout=5) as response:
+        state = json.load(response)
+    if any(job['status'] in ('running','queued') for job in state['jobs']):
+        return False
+    with urllib.request.urlopen(url, timeout=5) as response:
+        html = response.read().decode()
+    token = re.search(r'name="session" content="([^"]+)"', html).group(1)
+    request = urllib.request.Request(url+'/api/quit', data=b'{}',
+        headers={'Content-Type':'application/json', 'x-session':token}, method='POST')
+    with urllib.request.urlopen(request, timeout=5):
+        pass
+    return True
 
 def main():
     parser=argparse.ArgumentParser(description='Goosnav Comic Maker')
@@ -43,29 +79,43 @@ def main():
         return 0 if files and not warnings and all(r['status']=='complete' for r in results) else 2
     import uvicorn
     from .server import create_app
-    # Only one GUI worker may own this data directory. Reopening the launcher
-    # returns to the running app instead of replaying its unfinished jobs.
+    # Only one GUI worker may own this data directory.
     lease=(store.root/'instance.lock').open('a+b')
+    revision = code_revision()
     try:
-        if os.name=='nt':
-            import msvcrt
-            lease.seek(0);lease.write(b'0');lease.flush();lease.seek(0)
-            msvcrt.locking(lease.fileno(),msvcrt.LK_NBLCK,1)
-        else:
-            import fcntl
-            fcntl.flock(lease.fileno(),fcntl.LOCK_EX|fcntl.LOCK_NB)
+        lock_instance(lease)
     except OSError:
         instance=store.read('instance.json',{})
         port=instance.get('port')
         if not isinstance(port,int) or not 1<=port<=65535:
             print('Comic Maker is starting. Reopen the launcher in a moment.');return 0
         url=f'http://127.0.0.1:{port}'
-        print(f'Goosnav Comic Maker is already running · {url}',flush=True)
-        if not getattr(args,'no_browser',False): webbrowser.open(url)
-        return 0
+        restarting = False
+        if instance.get('revision') != revision:
+            try:
+                restarting = stop_idle_instance(url)
+            except (OSError, ValueError, AttributeError):
+                pass
+            if restarting:
+                print('Loading the updated Comic Maker…', flush=True)
+                for _ in range(100):
+                    try:
+                        lock_instance(lease)
+                        break
+                    except OSError:
+                        time.sleep(.1)
+                else:
+                    print('Comic Maker is still stopping. Reopen the launcher in a moment.')
+                    return 0
+            else:
+                print('Finish the current batch, then reopen this launcher to load the update.', flush=True)
+        if not restarting:
+            print(f'Goosnav Comic Maker is already running · {url}',flush=True)
+            if not getattr(args,'no_browser',False): webbrowser.open(url)
+            return 0
     sock=socket.socket();sock.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
     sock.bind(('127.0.0.1',getattr(args,'port',0)));port=sock.getsockname()[1]
-    atomic_json(store.root/'instance.json',{'port':port})
+    atomic_json(store.root/'instance.json',{'port':port, 'revision':revision})
     app=create_app(store)
     server=uvicorn.Server(uvicorn.Config(app,host='127.0.0.1',port=port,log_level='warning'))
     app.state.stop=lambda:setattr(server,'should_exit',True)

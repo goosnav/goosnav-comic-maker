@@ -31,8 +31,10 @@ def main():
         env.pop('OPENAI_API_KEY',None);env.pop('GEMINI_API_KEY',None)
         with socket.socket() as sock:
             sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
+        launcher = ([str(ROOT/'run.command')] if os.name != 'nt' else
+                    [sys.executable,'-m','comic_maker']) + ['gui','--no-browser','--port',str(port)]
         with (work/'server.log').open('w') as log:
-            process=subprocess.Popen([sys.executable,'-m','comic_maker','gui','--no-browser','--port',str(port)],cwd=ROOT,env=env,stdout=log,stderr=log)
+            process=subprocess.Popen(launcher,cwd=ROOT,env=env,stdout=log,stderr=log)
             try:
                 with httpx.Client(base_url=f'http://127.0.0.1:{port}',timeout=60) as client:
                     for _ in range(100):
@@ -44,6 +46,8 @@ def main():
                     html=client.get('/').text
                     token=re.search(r'name="session" content="([^"]+)"',html).group(1)
                     headers={'x-session':token}
+                    reopened=subprocess.run(launcher,cwd=ROOT,env=env,capture_output=True,text=True,timeout=15)
+                    assert reopened.returncode==0 and 'already running' in reopened.stdout
                     assert client.get('/static/app.js').status_code==200
                     assert client.post('/api/settings',json={}).status_code==403
                     values={}
@@ -57,12 +61,33 @@ def main():
                     assert result['status']=='complete',result
                     item=result['items'][0]['result']
                     assert item['schema_version']==2 and item['panel_count']==2
-                    assert len(item['social_files'])==6
+                    assert len(item['social_files'])==3
+                    assert all('--stylized-carousel--' in name for name in item['social_files'])
+                    for key in ('book_print_output','processed_page_output'):
+                        assert len(list(Path(result[key]).iterdir()))==2
                     for name in item['files']:
                         with Image.open(Path(item['output'])/name) as im:
                             im.verify()
                     url=f'/api/artifact/{job["id"]}/{identifier}/regular-carousel/03-summary.png'
                     assert client.get(url).status_code==200
+                    # A launcher must replace an idle process from before a code update.
+                    instance_path=work/'state/instance.json'
+                    instance=json.loads(instance_path.read_text());instance['revision']='older-code'
+                    instance_path.write_text(json.dumps(instance))
+                    previous=process
+                    process=subprocess.Popen(launcher,cwd=ROOT,env=env,stdout=log,stderr=log)
+                    previous.wait(timeout=15)
+                    assert previous.returncode==0
+                    for _ in range(100):
+                        try:
+                            if client.get('/health/ready').status_code==200:break
+                        except httpx.TransportError:pass
+                        time.sleep(.1)
+                    else:raise AssertionError('Updated launcher did not become ready')
+                    restored=client.get('/api/jobs/'+job['id']).json()
+                    assert restored['items'][0]['result']['files']==item['files']
+                    token=re.search(r'name="session" content="([^"]+)"',client.get('/').text).group(1)
+                    headers={'x-session':token}
                     client.post('/api/quit',headers=headers,json={}).raise_for_status()
                 process.wait(timeout=10)
                 assert process.returncode==0

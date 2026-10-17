@@ -6,7 +6,7 @@
 
 `pipeline.py` is the shared GUI/CLI service. Schema 2 records independent recipes and file hashes for full-page print, print crop, regular carousel, and stylized carousel. Print enlargement is binary nearest-neighbor, with proportional DPI. Social canvases are 2160 × 2700. Regular fitting uses Lanczos; stylized fitting uses nearest-neighbor. Both summary and individual stylized artwork start from cleaned native crops.
 
-Each GUI batch creates a numbered run and stable, collision-free comic names. Completed phases are hash-checked on retries. Social directories are replaced through prepared staging directories with recoverable backups. Print files are prepared before replacement. Collected social copies are derived outputs and can be repaired independently. Existing schema 1 exports are readable and left unchanged.
+Each GUI batch creates a numbered run and stable, collision-free comic names. Completed phases are hash-checked on retries. Social directories are replaced through prepared staging directories with recoverable backups. Print files are prepared before replacement. Collected social, book-print crop, and processed-page copies are derived outputs and can be repaired independently. Print copies become available as each print phase finishes, preserve PNG/TIFF bytes and DPI, and refresh during regeneration. Opening the app backfills missing print collections in existing runs and removes regular slides from `all-social`; only Red Sun stylized slides are collected. Relaunching after a code change restarts an idle instance so exports use the current code. An active batch is allowed to finish. Existing schema 1 exports are readable and left unchanged.
 
 ## Queue and corrections
 

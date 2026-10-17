@@ -56,6 +56,14 @@ def validate_output(export_root, sources):
 COORDINATE_VERSION = 1
 SCHEMA_VERSION = 2
 SOCIAL_PHASES = ('regular-carousel', 'stylized-carousel')
+PRINT_COLLECTIONS = {
+    'comic-crop': ('all-book-prints', 'comic', 'book_print'),
+    'full-page': ('all-processed-pages', 'full-page', 'processed_page'),
+}
+COLLECTION_FOLDERS = {'all-social', *(value[0] for value in PRINT_COLLECTIONS.values())}
+
+def print_collection_paths(root):
+    return {prefix+'_output': str(root/folder) for folder, _, prefix in PRINT_COLLECTIONS.values()}
 
 def fingerprint(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
@@ -144,7 +152,7 @@ def folder_name(name):
 
 def allocate_names(sources):
     names = []
-    used = {'all-social'}
+    used = set(COLLECTION_FOLDERS)
     for source in sources:
         base = folder_name(source.stem)
         name, n = base, 2
@@ -166,30 +174,46 @@ def create_run(parent):
         try:
             root.mkdir()
             (root/'.comic-maker-export').touch()
-            (root/'all-social').mkdir()
+            for folder in COLLECTION_FOLDERS:
+                (root/folder).mkdir()
             return root
         except FileExistsError:
             n += 1
 
-def collect_social(root, comic_name, check=lambda: None):
+def _collect_files(target, expected, owned_pattern, check):
     """Copies are derived outputs; a retry repairs them without processing images."""
-    target = root/'all-social'
     target.mkdir(exist_ok=True)
-    prefix = comic_name + '--'
-    expected = {}
-    for phase in SOCIAL_PHASES:
-        for path in sorted((root/comic_name/phase).glob('*.png')):
-            expected[prefix+phase+'--'+path.name] = path
     for name, path in expected.items():
         check()
         dest = target/name
         if not dest.exists() or digest(dest) != digest(path):
             atomic_bytes(dest, path.read_bytes())
     for path in target.iterdir():
-        owned = re.fullmatch(re.escape(prefix) + r'(regular-carousel|stylized-carousel)--\d+-(panel|summary)\.png', path.name)
+        owned = re.fullmatch(owned_pattern, path.name)
         if path.is_file() and owned and path.name not in expected:
             path.unlink()
     return {name: digest(target/name) for name in expected}
+
+def collect_social(root, comic_name, check=lambda: None):
+    prefix = comic_name + '--'
+    expected = {prefix+'stylized-carousel--'+path.name: path
+                for path in sorted((root/comic_name/'stylized-carousel').glob('*.png'))}
+    return _collect_files(root/'all-social', expected,
+                          re.escape(prefix) + r'(regular-carousel|stylized-carousel)--\d+-(panel|summary)\.png', check)
+
+def collect_prints(root, comic_name, check=lambda: None, phase=None):
+    result = print_collection_paths(root)
+    for name, (folder, stem, prefix) in PRINT_COLLECTIONS.items():
+        if phase is not None and phase != name:
+            continue
+        expected = {}
+        for ext in ('png', 'tif'):
+            source = root/comic_name/'print'/f'{stem}.{ext}'
+            if source.is_file():
+                expected[f'{comic_name}--{stem}.{ext}'] = source
+        result[prefix+'_files'] = _collect_files(root/folder, expected,
+            re.escape(comic_name+'--'+stem) + r'\.(png|tif)', check)
+    return result
 
 def _write_print(image, folder, stem, settings, dpi):
     if settings.master_scale > 1:
@@ -227,7 +251,8 @@ def process(source: Path, export_root: Path, settings: Settings, store: Store,
               'boxes': boxes, 'angle': analysis.angle, 'method': analysis.method, 'panel_count': len(boxes),
               'warnings': analysis.warnings, 'needs_review': bool(analysis.warnings), 'status': 'partial',
               'output': str(target), 'stages': {phase:{**previous.get('stages',{}).get(phase,{}), 'status': 'complete' if previous.get('stages',{}).get(phase,{}).get('recipe') == recipe else 'pending'} for phase,recipe in recipes.items()}, 'files': previous.get('files', {}),
-              'social_output': str(export_root/'all-social'), 'layout': imaging.layout_base.choose_layout(analysis.boxes, settings.layout)}
+              'social_output': str(export_root/'all-social'), **print_collection_paths(export_root),
+              'layout': imaging.layout_base.choose_layout(analysis.boxes, settings.layout)}
     def checkpoint():
         result['files'] = {str(p.relative_to(target)): digest(p) for p in sorted(target.rglob('*'))
                            if p.is_file() and not any(part.startswith('.') for part in p.relative_to(target).parts) and p.suffix in ('.png','.tif')}
@@ -246,6 +271,9 @@ def process(source: Path, export_root: Path, settings: Settings, store: Store,
             old = result['stages'].get(phase, {})
             if old.get('recipe') == recipe and old.get('files') and all((target/name).is_file() and digest(target/name) == value for name,value in old['files'].items()):
                 skipped += 1
+                if phase in PRINT_COLLECTIONS:
+                    result.update(collect_prints(export_root, target.name, check, phase))
+                    checkpoint()
                 continue
             event({'full-page':'Exporting print page','comic-crop':'Exporting print crop','regular-carousel':'Making regular carousel','stylized-carousel':'Making stylized carousel'}[phase])
             temporary = Path(tempfile.mkdtemp(prefix='.working-', dir=target))
@@ -276,6 +304,8 @@ def process(source: Path, export_root: Path, settings: Settings, store: Store,
                     if backup.exists():
                         shutil.rmtree(backup)
                 result['stages'][phase] = {'status':'complete', 'recipe':recipe, 'files': {str((folder/name).relative_to(target)):digest(folder/name) for name in names}}
+                if phase in PRINT_COLLECTIONS:
+                    result.update(collect_prints(export_root, target.name, check, phase))
                 checkpoint()
             finally:
                 if temporary.exists():

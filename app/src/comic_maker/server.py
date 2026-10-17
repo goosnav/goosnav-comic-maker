@@ -185,6 +185,11 @@ def create_app(store=None,token=None):
     def open_output(body:dict):
         job=jobs.get(body['job'])
         path=job.get('social_output', job['output']) if body.get('social') else job['output']
+        if body.get('collection'):
+            key = {'book-prints':'book_print_output', 'processed-pages':'processed_page_output'}.get(body['collection'])
+            if not key or key not in job:
+                raise ValueError('Collection not found in this batch')
+            path = job[key]
         if body.get('source'):
             item=next((i for i in job['items'] if i['id']==body['source']),None)
             path=(item or {}).get('result',{}).get('output',path)

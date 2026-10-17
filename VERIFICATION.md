@@ -32,6 +32,8 @@ The browser run exposed a numeric-coordinate commit issue. Coordinates now commi
 
 ## Seven supplied scans
 
+The social counts in this section and the original GUI acceptance record below predate the Red Sun-only collection correction.
+
 All seven raw TIFFs completed native-resolution production. Print masters were 6602 × 5088, binary, with 600 DPI. Source hashes remained unchanged. The output run contained **56 collected social files**.
 
 | Scan | Panels | Collected slides |
@@ -63,3 +65,24 @@ A separate fixture test reduced two panels to one and confirmed old panel/summar
 ## Scope of evidence
 
 macOS and the in-app browser were exercised. Windows/Linux native launchers were not tested on their operating systems. Enlargement dimensions/DPI and the supplied-scan 2× limit were checked; the seven-scan visual review used native print exports. Frame edits adjust crop regions and do not redraw ink borders.
+
+## Collected print folders — extension
+
+Added `all-book-prints` for comic-only crops and `all-processed-pages` for cleaned full scans, with PNG/TIFF copies and dedicated open actions. Extended the existing tests to cover collection hashes, retained DPI, duplicate names, refreshed crops, unchanged full-page copies, missing-copy repair, print availability after carousel failure, and filling older runs from completed prints. The 27-case verifier, HTTP/CLI smoke checks, and JavaScript syntax check passed.
+
+Collected both print sets from the seven-scan acceptance run: 14 book-print files and 14 processed-page files. Every copy matched its source print export's bytes, dimensions, and DPI. Original print files were not rewritten.
+
+## Red Sun-only collections and launcher repair
+
+`all-social` now collects only stylized slides and summaries. Regular carousels remain in the per-comic directories. Existing version 2 runs are upgraded on app startup using their saved exports; cleanup is not repeated. The launcher records a source revision and gracefully restarts an idle outdated instance. It reuses an unchanged instance and leaves an active batch running.
+
+The 27-case verifier passed again. Its HTTP export check now runs through `run.command`, checks all three collections, reopens the same instance, simulates an outdated instance, and verifies a clean replacement with unchanged saved output hashes. Existing tests cover startup backfill and removal of previously collected regular slides.
+
+Launched the actual application through `run.command` against the artist's history after backing up SQLite. Repaired both completed version 2 runs on the PRO-G40 drive:
+
+| Run | Comics | Red Sun social | Book prints | Processed pages |
+| --- | ---: | ---: | ---: | ---: |
+| comic-maker-run-001 | 5 | 25 | 10 | 10 |
+| comic-maker-run-002 | 18 | 75 | 36 | 36 |
+
+All 192 collected copies matched their per-comic originals by SHA-256. Both runs had zero regular slides in `all-social`. All existing per-comic output hashes were unchanged. Through the actual GUI, Open book prints opened the latest run's 36-file collection in Finder; Open exports showed all three collection folders. Schema 1 exports were left unchanged.

@@ -8,7 +8,7 @@ Double-click **run.command** on macOS, or run `./run.sh`. First launch needs uv 
 
 1. **Choose folder** or **Choose files**. Set **Include subfolders** as needed. You can also paste paths.
 2. Choose a destination and press **Process comics**.
-3. Use **Open exports** or **Open all social** to collect the results.
+3. Use **Open exports**, **Open all social**, **Open book prints**, or **Open processed pages** to collect the results.
 
 Each batch creates a new numbered run. Failed comics do not stop the others. Estimated boundaries export with a **Needs review** flag. Refreshing the browser does not interrupt a batch; restarting the app resumes interrupted work. **Stop** takes effect between processing operations. **Retry unfinished** preserves completed stages whose output hashes still match.
 
@@ -58,16 +58,27 @@ comic-maker-run-001/
     manifest.json
   Comic A-2/
     ...
+  all-book-prints/
+    Comic A--comic.png
+    Comic A--comic.tif
+    Comic A-2--comic.png
+    Comic A-2--comic.tif
+  all-processed-pages/
+    Comic A--full-page.png
+    Comic A--full-page.tif
+    Comic A-2--full-page.png
+    Comic A-2--full-page.tif
   all-social/
-    Comic A--regular-carousel--01-panel.png
-    Comic A--regular-carousel--02-panel.png
-    Comic A--regular-carousel--03-summary.png
     Comic A--stylized-carousel--01-panel.png
+    Comic A--stylized-carousel--02-panel.png
+    Comic A--stylized-carousel--03-summary.png
     ...
   batch-<id>.json
 ```
 
-The summary is saved once in each version, numbered after its panels. `all-social` contains byte-identical copies of every social slide. Prefixes distinguish comics and versions; numbers preserve reading order. Duplicate comic names receive deterministic suffixes. Marked export folders are excluded from recursive discovery.
+`all-book-prints` collects the cleaned comic-only crops; `all-processed-pages` collects the cleaned full scans. Both contain byte-identical PNG and TIFF copies, retaining print dimensions and DPI. Completed print stages are collected even if a later carousel stage fails. Regeneration refreshes the affected copies; restarting or retrying also repairs missing copies. Opening the app fills in missing collections for existing version 2 runs from saved exports.
+
+The summary is saved once in each version, numbered after its panels. `all-social` contains byte-identical copies of only the Red Sun stylized slides and summaries. Regular slides stay in each comic’s `regular-carousel` folder. Prefixes distinguish comics; numbers preserve reading order. Duplicate comic names receive deterministic suffixes. Marked export folders are excluded from recursive discovery.
 
 Manifests and recipes use version 2, with completed stages and output hashes. Replacement files are prepared before successful exports are replaced. Older exports remain untouched and accessible through history. Saved cleanup preferences migrate; obsolete AI and exclusive-style preferences are discarded. AI colorization, vision recovery, providers, and request accounting have been removed.
 
