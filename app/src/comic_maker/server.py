@@ -42,6 +42,11 @@ return paths'''
         raise ValueError('No native picker is installed. Paste a folder path in the source field.')
     return [p for p in result.stdout.strip().splitlines() if p]
 
+def derived_output(paths):
+    """Exports go inside the chosen folder (or beside-the-file's own folder)."""
+    first=Path(paths[0]).expanduser() if paths and isinstance(paths[0],str) else None
+    return str(first if first.is_dir() else first.parent) if first and first.exists() else None
+
 def create_app(store=None,token=None):
     store=store or Store();token=token or secrets.token_urlsafe(32)
     jobs=Jobs(store)
@@ -92,7 +97,7 @@ def create_app(store=None,token=None):
     def state():
         session=store.read('session.json',{})
         return {'version':__version__,'settings':store.settings().model_dump(),
-                'session':session,'jobs':jobs.list(),'default_output':str(Path.home()/'Pictures/Goosnav Exports')}
+                'session':session,'jobs':jobs.list(),'default_output':derived_output(session.get('paths',[])) or str(Path.home()/'Pictures/Goosnav Exports')}
 
     @app.post('/api/settings')
     def settings(body:dict): return store.save(body).model_dump()
@@ -108,10 +113,8 @@ def create_app(store=None,token=None):
         files,warnings=pipeline.discover(paths,values,body.get('output'))
         sources=jobs.register(files)
         previous_session=store.read('session.json',{})
-        atomic_json(store.root/'session.json',{'paths':paths,'sources':sources,'output':body.get('destination',body.get('output',previous_session.get('output','')))})
-        first=Path(paths[0]).expanduser() if paths else None
-        default_output=str(first if first.is_dir() else first.parent) if first and first.exists() else None
-        return {'sources':sources,'warnings':warnings,'default_output':default_output}
+        atomic_json(store.root/'session.json',{'paths':paths,'sources':sources,'output':body.get('destination',body.get('output',previous_session.get('output',''))),'output_manual':bool(body.get('manual'))})
+        return {'sources':sources,'warnings':warnings,'default_output':derived_output(paths)}
 
     @app.get('/api/source/{identifier}')
     def source_image(identifier:str):
@@ -139,7 +142,7 @@ def create_app(store=None,token=None):
         settings=Settings.model_validate(body.get('settings',{}));store.save(settings.model_dump())
         if not str(body.get('output','')).strip(): raise ValueError('Choose an export folder')
         job=jobs.start(body.get('ids',[]),body['output'],settings)
-        session=store.read('session.json',{});session['output']=str(Path(body['output']).expanduser().resolve())
+        session=store.read('session.json',{});session['output']=str(Path(body['output']).expanduser().resolve());session['output_manual']=bool(body.get('manual'))
         atomic_json(store.root/'session.json',session)
         return job
 
@@ -188,7 +191,7 @@ def create_app(store=None,token=None):
         job=jobs.get(body['job'])
         path=job.get('social_output', job['output']) if body.get('social') else job['output']
         if body.get('collection'):
-            key = {'book-prints':'book_print_output', 'processed-pages':'processed_page_output'}.get(body['collection'])
+            key = {'book-prints':'book_print_output', 'processed-pages':'processed_page_output', 'social-carousels':'carousel_output'}.get(body['collection'])
             if not key or key not in job:
                 raise ValueError('Collection not found in this batch')
             path = job[key]

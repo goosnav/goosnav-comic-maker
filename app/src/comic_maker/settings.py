@@ -19,6 +19,8 @@ class Settings(BaseModel):
     recursive: bool = True
     pattern: str = '*'
     lines_file: str = ''
+    ad_enabled: bool = False
+    ad_folder: str = ''
 
 def data_root() -> Path:
     if os.environ.get('COMIC_MAKER_DATA'):

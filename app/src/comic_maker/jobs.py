@@ -53,6 +53,7 @@ class Jobs:
             (root/folder).mkdir(exist_ok=True)
         job.update(pipeline.print_collection_paths(root))
         job['social_output'] = str(root/'all-social')
+        job['carousel_output'] = str(root/'all-social-carousels')
         for item in job['items']:
             result = item.get('result', {})
             if result.get('schema_version') != 2:
@@ -109,10 +110,12 @@ class Jobs:
                 pass  # An unreadable comic fails in the queue without blocking the others.
         if settings.lines_file:
             pipeline.read_lines(settings.lines_file)
+        if settings.ad_enabled:
+            pipeline.ad_images(settings.ad_folder)
         target = pipeline.create_run(output)
         names = pipeline.allocate_names(paths)
-        job = {'id': uuid.uuid4().hex[:16], 'schema_version': 2, 'created': time.time(), 'status': 'queued',
-               'output': str(target), 'social_output': str(target/'all-social'), **pipeline.print_collection_paths(target), 'settings': settings.model_dump(),
+        job = {'id': uuid.uuid4().hex[:16], 'schema_version': 2, 'created': time.time(), 'stamp': time.strftime('%Y-%m-%d_%H%M'), 'status': 'queued',
+               'output': str(target), 'social_output': str(target/'all-social'), 'carousel_output': str(target/'all-social-carousels'), **pipeline.print_collection_paths(target), 'settings': settings.model_dump(),
                'cancel_requested': False, 'items': [
                    {'id': pipeline.source_id(p), 'source': str(p), 'name': p.name, 'folder': name,
                     'status': 'queued', 'stage': 'Waiting'} for p,name in zip(paths,names)]}
@@ -187,7 +190,7 @@ class Jobs:
                         item['stage']=stage;persist()
                     with self.image_lock:
                         item_settings = settings.model_copy(update={'layout':item.get('layout', settings.layout)})
-                        result=pipeline.process(Path(item['source']),Path(job['output']),item_settings,self.store,event,check,comic_name=item.get('folder'),number=number)
+                        result=pipeline.process(Path(item['source']),Path(job['output']),item_settings,self.store,event,check,comic_name=item.get('folder'),number=number,stamp=job.get('stamp'))
                     item['result']=result
                     item.pop('error', None)
                     item['status']='partial' if result['status']=='partial' else 'warning' if result['warnings'] else 'complete'

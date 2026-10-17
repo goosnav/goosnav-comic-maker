@@ -7,7 +7,7 @@ Double-click **run.command** on macOS, or run `./run.sh`. First launch needs uv 
 ## Daily use
 
 1. **Choose folder** or **Choose files**. Set **Include subfolders** as needed. You can also paste paths.
-2. Check the destination and press **Process comics**. It defaults to the first folder you choose (or the folder holding the first file), so the numbered run lands inside it. Choosing a destination yourself overrides this.
+2. Check the destination (the saved destination is ignored unless you picked one yourself, so the run always lands in your source folder by default) and press **Process comics**. It defaults to the first folder you choose (or the folder holding the first file), so the numbered run lands inside it. Choosing a destination yourself overrides this.
 3. Use **Open exports**, **Open all social**, **Open book prints**, or **Open processed pages** to collect the results.
 
 Each batch creates a new numbered run. Failed comics do not stop the others. Estimated boundaries export with a **Needs review** flag. Refreshing the browser does not interrupt a batch; restarting the app resumes interrupted work. **Stop** takes effect between processing operations. **Retry unfinished** preserves completed stages whose output hashes still match.
@@ -19,7 +19,11 @@ Each batch creates a new numbered run. Failed comics do not stop the others. Est
 - **Regular carousel:** one 2160 × 2700 slide per panel, followed by a summary. High-quality resizing retains fine strokes.
 - **Stylized carousel:** Red Sun black-and-white processing applied separately to full-resolution cleaned panel crops. Defaults are 512 pixels across each panel's artwork and 1024 across each summary panel's artwork. Final fitting uses nearest-neighbor resizing without dithering or gray fringes.
 
-**Caption lines:** pick a .txt file on the main screen (remembered between launches). Each stylized carousel folder gets a `caption.txt` holding one randomly chosen non-blank line from it. The folder number (`stylized-carousel-01`, `-02`, …) is the comic's position in the run. Leave the field blank to skip captions.
+**Caption lines:** pick a .txt file on the main screen (remembered between launches). Each stylized carousel folder gets a `caption.txt` holding one randomly chosen non-blank line from it. Stylized folders are named `stylized-carousel-<date>_<time>-<NN>`; NN is the comic's position in the run. Leave the field blank to skip captions.
+
+**Ad slide:** tick *Add random ad before summary* and choose a folder of images (png, jpg, tif, bmp, webp, gif). One random image per comic is saved as `NN-ad.png` right before the summary, and the summary shifts to the next number. It applies to the stylized carousel only. Non-PNG images are converted to PNG; PNGs are copied unchanged.
+
+`all-social-carousels` holds a complete copy of every stylized folder (slides, ad, caption) so you can drag them all at once.
 
 Occasional controls live in **Settings**: ink strength, dust removal, print enlargement, the two artwork grid widths, and filename filtering. Leave a grid width blank to keep native pixels before fitting. Print masters always use the full-resolution cleanup, independent of stylization.
 
@@ -53,11 +57,12 @@ comic-maker-run-001/
       01-panel.png
       02-panel.png
       03-summary.png
-    stylized-carousel-01/
+    stylized-carousel-2026-10-17_1032-01/
       01-panel.png
       02-panel.png
-      03-summary.png
-      caption.txt
+      03-ad.png            (only with the ad toggle)
+      04-summary.png
+      caption.txt          (only with a caption file)
     manifest.json
   Comic A-2/
     ...
@@ -76,6 +81,9 @@ comic-maker-run-001/
     Comic A--stylized-carousel--02-panel.png
     Comic A--stylized-carousel--03-summary.png
     ...
+  all-social-carousels/
+    stylized-carousel-2026-10-17_1032-01/   (full copy of each comic's folder)
+    stylized-carousel-2026-10-17_1032-02/
   batch-<id>.json
 ```
 

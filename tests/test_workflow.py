@@ -46,7 +46,7 @@ def test_exports_resolution_dpi_modes_source_and_collection(tmp_path):
         with Image.open(root/'scan'/'print'/f'comic.{ext}') as image:
             assert image.width<1200 and image.height<800
     for phase in pipeline.SOCIAL_PHASES:
-        names=sorted((root/'scan'/(phase+'-01' if phase=='stylized-carousel' else phase)).glob('*.png'))
+        names=sorted((next(root.joinpath('scan').glob('stylized-carousel-*')) if phase=='stylized-carousel' else root/'scan'/phase).glob('*.png'))
         assert [p.name for p in names]==['01-panel.png','02-panel.png','03-summary.png']
         for p in names:
             with Image.open(p) as image:
@@ -188,7 +188,7 @@ def test_stage_hashes_repair_only_damaged_files(tmp_path):
     first=pipeline.process(source,root,Settings(),store)
     assert pipeline.process(source,root,Settings(),store)['cached']
     page=root/'scan/print/full-page.png';mtime=page.stat().st_mtime_ns
-    damaged=root/'scan/stylized-carousel-01/01-panel.png';damaged.write_bytes(b'broken')
+    damaged=next(root.joinpath('scan').glob('stylized-carousel-*'))/'01-panel.png';damaged.write_bytes(b'broken')
     repaired=pipeline.process(source,root,Settings(),store)
     assert not repaired['cached'] and page.stat().st_mtime_ns==mtime
     with Image.open(damaged) as image:assert image.size==(2160,2700)
@@ -372,18 +372,50 @@ def test_supplied_raw_scan_panel_counts(name,count):
     assert len(result.boxes)==count and not result.warnings
 
 
-def test_stylized_folders_are_numbered_and_get_a_random_caption(tmp_path):
+def test_stylized_folders_are_stamped_numbered_captioned_and_collected(tmp_path):
     lines=tmp_path/'lines.txt';lines.write_text('\nfirst line\n  second line  \n\nthird line\n')
     store=Store(tmp_path/'state');root=pipeline.create_run(tmp_path/'out');settings=Settings(lines_file=str(lines))
     for number in (1,2):
         source=tmp_path/f'scan{number}.png';drawing(source)
-        result=pipeline.process(source,root,settings,store,number=number)
-        folder=root/f'scan{number}'/f'stylized-carousel-{number:02d}'
+        pipeline.process(source,root,settings,store,number=number,stamp='2026-10-17_1032')
+        folder=root/f'scan{number}'/f'stylized-carousel-2026-10-17_1032-{number:02d}'
         assert (folder/'01-panel.png').is_file() and not (root/f'scan{number}/stylized-carousel').exists()
         assert (folder/'caption.txt').read_text().strip() in ('first line','second line','third line')
-        assert not list(folder.glob('*/'))
-        assert pipeline.process(source,root,settings,store,number=number)['cached']
+        assert not [p for p in folder.iterdir() if p.is_dir()]
+        assert pipeline.process(source,root,settings,store,number=number,stamp='other')['cached']
+        copy=root/'all-social-carousels'/folder.name
+        assert sorted(p.name for p in copy.iterdir())==sorted(p.name for p in folder.iterdir())
+        assert pipeline.digest(copy/'caption.txt')==pipeline.digest(folder/'caption.txt')
     assert len(list((root/'all-social').glob('*.png')))==6
     plain=pipeline.process(tmp_path/'scan1.png',pipeline.create_run(tmp_path/'out'),Settings(),store)
     assert not list(Path(plain['output']).glob('stylized-carousel*/caption.txt'))
     with pytest.raises(ValueError):pipeline.read_lines(tmp_path/'missing.txt')
+
+
+def test_random_ad_image_is_added_before_the_summary(tmp_path):
+    ads=tmp_path/'ads';ads.mkdir()
+    Image.new('RGBA',(300,200),(255,0,0,128)).save(ads/'a.png')
+    Image.new('RGB',(300,200),(0,255,0)).save(ads/'b.JPG')
+    Image.new('P',(300,200)).save(ads/'c.gif');Image.new('RGB',(300,200)).save(ads/'d.tif');Image.new('RGB',(300,200)).save(ads/'e.webp')
+    Image.new('I;16',(300,200),40000).save(ads/'f.tif');(ads/'notes.txt').write_text('skip');(ads/'.hidden.png').write_bytes(b'x')
+    for _ in range(12):
+        write=tmp_path/'ad.png';pipeline.write_ad(ads,write)
+        with Image.open(write) as image:assert image.format=='PNG' and image.size==(300,200)
+    source=tmp_path/'scan.png';drawing(source);store=Store(tmp_path/'state');root=pipeline.create_run(tmp_path/'out')
+    result=pipeline.process(source,root,Settings(ad_enabled=True,ad_folder=str(ads)),store)
+    folder=next(root.joinpath('scan').glob('stylized-carousel-*'))
+    assert sorted(p.name for p in folder.glob('*.png'))==['01-panel.png','02-panel.png','03-ad.png','04-summary.png']
+    assert (root/'all-social-carousels'/folder.name/'03-ad.png').is_file() and len(result['social_files'])==4
+    assert not (root/'scan/regular-carousel/03-ad.png').exists()
+    with pytest.raises(ValueError):pipeline.ad_images(tmp_path/'empty')
+    with pytest.raises(ValueError):pipeline.ad_images('')
+
+
+def test_destination_defaults_inside_the_source_folder(tmp_path):
+    from comic_maker.server import derived_output
+    folder=tmp_path/'Comics';folder.mkdir();scan=folder/'a.png';drawing(scan)
+    assert derived_output([str(folder)+'/'])==str(folder) and derived_output([str(scan)])==str(folder)
+    assert derived_output([])is None and derived_output([str(tmp_path/'missing')])is None
+    with TestClient(create_app(Store(tmp_path/'state'),'t')) as client:
+        client.post('/api/scan',headers={'x-session':'t'},json={'paths':[str(folder)],'destination':str(tmp_path),'manual':False})
+        assert client.get('/api/state').json()['default_output']==str(folder)

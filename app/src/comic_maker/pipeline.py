@@ -8,9 +8,10 @@ import random
 import re
 import shutil
 import tempfile
+import time
 from pathlib import Path
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 from . import imaging, detection, __version__
 from .settings import Settings, Store, atomic_json, atomic_bytes
 from .detector_base import Box
@@ -61,7 +62,7 @@ PRINT_COLLECTIONS = {
     'comic-crop': ('all-book-prints', 'comic', 'book_print'),
     'full-page': ('all-processed-pages', 'full-page', 'processed_page'),
 }
-COLLECTION_FOLDERS = {'all-social', *(value[0] for value in PRINT_COLLECTIONS.values())}
+COLLECTION_FOLDERS = {'all-social', 'all-social-carousels', *(value[0] for value in PRINT_COLLECTIONS.values())}
 
 def print_collection_paths(root):
     return {prefix+'_output': str(root/folder) for folder, _, prefix in PRINT_COLLECTIONS.values()}
@@ -192,14 +193,38 @@ def read_lines(path):
         raise ValueError('The caption file has no text lines')
     return lines
 
-def stylized_folder(target, number):
-    """Numbered per comic; an existing folder (retry, older run) keeps its name."""
+def ad_images(folder):
+    if not str(folder).strip():
+        raise ValueError('Choose the ad image folder')
+    try:
+        found = sorted(p for p in Path(folder).expanduser().iterdir()
+                       if p.is_file() and not p.name.startswith('.') and p.suffix.lower() in SUPPORTED)
+    except OSError as exc:
+        raise ValueError(f'Could not read the ad folder: {exc}')
+    if not found:
+        raise ValueError('The ad folder has no images (png, jpg, tif, bmp, webp, gif)')
+    return found
+
+def write_ad(folder, dest):
+    """Random ad image saved as PNG so every platform accepts the slide; PNGs are copied untouched."""
+    source = random.choice(ad_images(folder))
+    if source.suffix.lower() == '.png':
+        shutil.copyfile(source, dest)
+        return
+    with Image.open(source) as opened:
+        image = ImageOps.exif_transpose(opened)
+        if image.mode.startswith('I'):  # 16/32-bit grayscale scales down instead of clipping
+            image = image.point(lambda v: v*(1/256)).convert('L')
+        image.convert('RGBA' if 'A' in image.getbands() or 'transparency' in image.info else 'RGB').save(dest)
+
+def stylized_folder(target, number, stamp):
+    """Stamped and numbered per comic; an existing folder (retry, older run) keeps its name."""
     found = sorted(p.name for p in target.glob('stylized-carousel*') if p.is_dir())
-    return found[0] if found else f'stylized-carousel-{number:02d}'
+    return found[0] if found else f'stylized-carousel-{stamp}-{number:02d}'
 
 def _collect_files(target, expected, owned_pattern, check):
     """Copies are derived outputs; a retry repairs them without processing images."""
-    target.mkdir(exist_ok=True)
+    target.mkdir(parents=True, exist_ok=True)
     for name, path in expected.items():
         check()
         dest = target/name
@@ -211,12 +236,21 @@ def _collect_files(target, expected, owned_pattern, check):
             path.unlink()
     return {name: digest(target/name) for name in expected}
 
+def _collect_carousels(root, comic_name, check):
+    """Whole stylized-carousel folders (slides, ad, caption) side by side, ready to drag and drop."""
+    for src in sorted((root/comic_name).glob('stylized-carousel*')):
+        if src.is_dir():
+            name = comic_name+'--'+src.name if src.name == 'stylized-carousel' else src.name
+            _collect_files(root/'all-social-carousels'/name,
+                           {p.name: p for p in src.iterdir() if p.is_file() and not p.name.startswith('.')}, r'.*', check)
+
 def collect_social(root, comic_name, check=lambda: None):
+    _collect_carousels(root, comic_name, check)
     prefix = comic_name + '--'
     expected = {prefix+'stylized-carousel--'+path.name: path
                 for path in sorted((root/comic_name).glob('stylized-carousel*/*.png'))}
     return _collect_files(root/'all-social', expected,
-                          re.escape(prefix) + r'(regular-carousel|stylized-carousel)--\d+-(panel|summary)\.png', check)
+                          re.escape(prefix) + r'(regular-carousel|stylized-carousel)--\d+-(panel|ad|summary)\.png', check)
 
 def collect_prints(root, comic_name, check=lambda: None, phase=None):
     result = print_collection_paths(root)
@@ -240,7 +274,7 @@ def _write_print(image, folder, stem, settings, dpi):
         imaging.save(image, folder/f'{stem}.{ext}', scaled_dpi)
 
 def process(source: Path, export_root: Path, settings: Settings, store: Store,
-            event=lambda stage: None, check=lambda: None, overrides=None, comic_name=None, number=1):
+            event=lambda stage: None, check=lambda: None, overrides=None, comic_name=None, number=1, stamp=None):
     export_root = validate_output(export_root, [source])
     imaging.validate_enlargement(source, settings.master_scale)
     sha = digest(source)
@@ -253,6 +287,7 @@ def process(source: Path, export_root: Path, settings: Settings, store: Store,
         previous = json.loads(manifest_path.read_text())
     except (OSError, ValueError):
         previous = {}
+    stamp = stamp or time.strftime('%Y-%m-%d_%H%M')
     check(); event('Cleaning scan')
     analysis, clean, dpi = prepare(source, settings, overrides)
     if digest(source) != sha:
@@ -262,13 +297,14 @@ def process(source: Path, export_root: Path, settings: Settings, store: Store,
     recipes = {'full-page': page_recipe,
                'comic-crop': fingerprint([page_recipe, boxes]),
                'regular-carousel': fingerprint([sha, settings.ink_strength, settings.cleanup, boxes, settings.canvas_width, settings.layout, __version__]),
-               'stylized-carousel': fingerprint([sha, settings.ink_strength, settings.cleanup, boxes, settings.canvas_width, settings.layout, settings.panel_grid_width, settings.summary_grid_width, __version__])}
+               'stylized-carousel': fingerprint([sha, settings.ink_strength, settings.cleanup, boxes, settings.canvas_width, settings.layout, settings.panel_grid_width, settings.summary_grid_width, __version__]
+                                                  + [x for x, on in (('ad', settings.ad_enabled), ('caption', bool(settings.lines_file))) if on])}
     result = {'schema_version': SCHEMA_VERSION, 'recipe_version': SCHEMA_VERSION, 'app_version': __version__, 'source': str(source), 'source_sha256': sha,
               'coordinate_version': COORDINATE_VERSION, 'settings': settings.model_dump(), 'size': list(clean.size), 'dpi': dpi,
               'boxes': boxes, 'angle': analysis.angle, 'method': analysis.method, 'panel_count': len(boxes),
               'warnings': analysis.warnings, 'needs_review': bool(analysis.warnings), 'status': 'partial',
               'output': str(target), 'stages': {phase:{**previous.get('stages',{}).get(phase,{}), 'status': 'complete' if previous.get('stages',{}).get(phase,{}).get('recipe') == recipe else 'pending'} for phase,recipe in recipes.items()}, 'files': previous.get('files', {}),
-              'social_output': str(export_root/'all-social'), **print_collection_paths(export_root),
+              'social_output': str(export_root/'all-social'), 'carousel_output': str(export_root/'all-social-carousels'), **print_collection_paths(export_root),
               'layout': imaging.layout_base.choose_layout(analysis.boxes, settings.layout)}
     def checkpoint():
         result['files'] = {str(p.relative_to(target)): digest(p) for p in sorted(target.rglob('*'))
@@ -278,7 +314,7 @@ def process(source: Path, export_root: Path, settings: Settings, store: Store,
     try:
         for phase, recipe in recipes.items():
             check()
-            folder = target/('print' if phase in ('full-page','comic-crop') else stylized_folder(target, number) if phase == 'stylized-carousel' else phase)
+            folder = target/('print' if phase in ('full-page','comic-crop') else stylized_folder(target, number, stamp) if phase == 'stylized-carousel' else phase)
             backup = target/('.previous-'+phase)
             if backup.exists():
                 if not folder.exists():
@@ -306,7 +342,11 @@ def process(source: Path, export_root: Path, settings: Settings, store: Store,
                         imaging.save(imaging.panel_canvas(imaging.crop_panel(clean, box), settings, styled), temporary/f'{i:02d}-panel.png')
                     summary, layout = imaging.summary_canvas(clean, analysis.boxes, settings, styled)
                     result['layout'] = layout
-                    imaging.save(summary, temporary/f'{len(boxes)+1:02d}-summary.png')
+                    slot = len(boxes)+1
+                    if styled and settings.ad_enabled:
+                        write_ad(settings.ad_folder, temporary/f'{slot:02d}-ad.png')
+                        slot += 1
+                    imaging.save(summary, temporary/f'{slot:02d}-summary.png')
                     if styled and settings.lines_file:
                         (temporary/'caption.txt').write_text(random.choice(read_lines(settings.lines_file))+'\n', encoding='utf-8')
                 check()
