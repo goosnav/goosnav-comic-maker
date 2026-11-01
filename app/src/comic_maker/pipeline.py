@@ -62,10 +62,11 @@ PRINT_COLLECTIONS = {
     'comic-crop': ('all-book-prints', 'comic', 'book_print'),
     'full-page': ('all-processed-pages', 'full-page', 'processed_page'),
 }
-COLLECTION_FOLDERS = {'all-social', 'all-social-carousels', *(value[0] for value in PRINT_COLLECTIONS.values())}
+COLLECTION_FOLDERS = {'all-social', 'all-social-carousels', 'all-full-size-pages', *(value[0] for value in PRINT_COLLECTIONS.values())}
 
 def print_collection_paths(root):
-    return {prefix+'_output': str(root/folder) for folder, _, prefix in PRINT_COLLECTIONS.values()}
+    return {**{prefix+'_output': str(root/folder) for folder, _, prefix in PRINT_COLLECTIONS.values()},
+            'full_size_page_output': str(root/'all-full-size-pages')}
 
 def fingerprint(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
@@ -252,7 +253,7 @@ def collect_social(root, comic_name, check=lambda: None):
     return _collect_files(root/'all-social', expected,
                           re.escape(prefix) + r'(regular-carousel|stylized-carousel)--\d+-(panel|ad|summary)\.png', check)
 
-def collect_prints(root, comic_name, check=lambda: None, phase=None):
+def collect_prints(root, comic_name, check=lambda: None, phase=None, metadata=None, page=None):
     result = print_collection_paths(root)
     for name, (folder, stem, prefix) in PRINT_COLLECTIONS.items():
         if phase is not None and phase != name:
@@ -264,6 +265,24 @@ def collect_prints(root, comic_name, check=lambda: None, phase=None):
                 expected[f'{comic_name}--{stem}.{ext}'] = source
         result[prefix+'_files'] = _collect_files(root/folder, expected,
             re.escape(comic_name+'--'+stem) + r'\.(png|tif)', check)
+    if phase in (None, 'full-page'):
+        master = root/comic_name/'print/full-page.tif'
+        if master.is_file():
+            check()
+            if metadata is None:
+                metadata = json.loads((root/comic_name/'manifest.json').read_text())
+            suffix = Path(metadata['source']).suffix
+            filename = comic_name + suffix
+            if page is None:
+                with Image.open(master) as opened:
+                    page = opened.resize(tuple(metadata['size']), Image.Resampling.NEAREST)
+            data = imaging.image_bytes(page, Image.registered_extensions()[suffix.lower()], tuple(metadata['dpi']))
+            destination = root/'all-full-size-pages'/filename
+            sha = hashlib.sha256(data).hexdigest()
+            if not destination.is_file() or digest(destination) != sha:
+                check()
+                atomic_bytes(destination, data)
+            result['full_size_page_files'] = {filename: sha}
     return result
 
 def _write_print(image, folder, stem, settings, dpi):
@@ -325,7 +344,7 @@ def process(source: Path, export_root: Path, settings: Settings, store: Store,
             if old.get('recipe') == recipe and old.get('files') and all((target/name).is_file() and digest(target/name) == value for name,value in old['files'].items()):
                 skipped += 1
                 if phase in PRINT_COLLECTIONS:
-                    result.update(collect_prints(export_root, target.name, check, phase))
+                    result.update(collect_prints(export_root, target.name, check, phase, result, clean))
                     checkpoint()
                 continue
             event({'full-page':'Exporting print page','comic-crop':'Exporting print crop','regular-carousel':'Making regular carousel','stylized-carousel':'Making stylized carousel'}[phase])
@@ -364,7 +383,7 @@ def process(source: Path, export_root: Path, settings: Settings, store: Store,
                         shutil.rmtree(backup)
                 result['stages'][phase] = {'status':'complete', 'recipe':recipe, 'files': {str((folder/name).relative_to(target)):digest(folder/name) for name in names}}
                 if phase in PRINT_COLLECTIONS:
-                    result.update(collect_prints(export_root, target.name, check, phase))
+                    result.update(collect_prints(export_root, target.name, check, phase, result, clean))
                 checkpoint()
             finally:
                 if temporary.exists():

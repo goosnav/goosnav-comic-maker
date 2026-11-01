@@ -8,7 +8,7 @@ Double-click **run.command** on macOS, or run `./run.sh`. First launch needs uv 
 
 1. **Choose folder** or **Choose files**. Set **Include subfolders** as needed. You can also paste paths.
 2. Check the destination (the saved destination is ignored unless you picked one yourself, so the run always lands in your source folder by default) and press **Process comics**. It defaults to the first folder you choose (or the folder holding the first file), so the numbered run lands inside it. Choosing a destination yourself overrides this.
-3. Use **Open exports**, **Open all social**, **Open book prints**, or **Open processed pages** to collect the results.
+3. Use **Open exports**, **Open all social**, **Open book prints**, **Open processed pages**, or **Open full-size pages** to collect the results.
 
 Each batch creates a new numbered run. Failed comics do not stop the others. Estimated boundaries export with a **Needs review** flag. Refreshing the browser does not interrupt a batch; restarting the app resumes interrupted work. **Stop** takes effect between processing operations. **Retry unfinished** preserves completed stages whose output hashes still match.
 
@@ -76,6 +76,9 @@ comic-maker-run-001/
     Comic A--full-page.tif
     Comic A-2--full-page.png
     Comic A-2--full-page.tif
+  all-full-size-pages/
+    Comic A.tiff            (same format as its source scan)
+    Comic A-2.jpg
   all-social/
     Comic A--stylized-carousel--01-panel.png
     Comic A--stylized-carousel--02-panel.png
@@ -86,6 +89,8 @@ comic-maker-run-001/
     stylized-carousel-2026-10-17_1032-02/
   batch-<id>.json
 ```
+
+`all-full-size-pages` contains one cleaned, uncropped page per comic in its original image format and native pixel dimensions, regardless of print enlargement. Source DPI is retained where the format supports it (600 DPI if missing). JPEG sources use maximum-quality JPEG output. Existing runs fill this folder from their saved full-page print masters when the app opens.
 
 `all-book-prints` collects the cleaned comic-only crops; `all-processed-pages` collects the cleaned full scans. Both contain byte-identical PNG and TIFF copies, retaining print dimensions and DPI. Completed print stages are collected even if a later carousel stage fails. Regeneration refreshes the affected copies; restarting or retrying also repairs missing copies. Opening the app fills in missing collections for existing version 2 runs from saved exports.
 

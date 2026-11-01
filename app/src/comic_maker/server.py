@@ -191,7 +191,7 @@ def create_app(store=None,token=None):
         job=jobs.get(body['job'])
         path=job.get('social_output', job['output']) if body.get('social') else job['output']
         if body.get('collection'):
-            key = {'book-prints':'book_print_output', 'processed-pages':'processed_page_output', 'social-carousels':'carousel_output'}.get(body['collection'])
+            key = {'book-prints':'book_print_output', 'processed-pages':'processed_page_output', 'full-size-pages':'full_size_page_output', 'social-carousels':'carousel_output'}.get(body['collection'])
             if not key or key not in job:
                 raise ValueError('Collection not found in this batch')
             path = job[key]

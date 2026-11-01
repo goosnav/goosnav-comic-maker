@@ -37,6 +37,14 @@ def image_bytes(img, fmt='PNG', dpi=None):
     options = {'dpi': dpi} if dpi else {}
     if fmt == 'TIFF':
         options['compression'] = 'group4' if img.mode == '1' else 'tiff_lzw'
+    elif fmt == 'JPEG':
+        img = img.convert('L')
+        options.update(quality=100, subsampling=0)
+    elif fmt == 'WEBP':
+        img = img.convert('RGB')
+        options['lossless'] = True
+    elif fmt == 'GIF':
+        img = img.convert('L')
     img.save(buf, fmt, **options)
     return buf.getvalue()
 
