@@ -90,3 +90,7 @@ All 192 collected copies matched their per-comic originals by SHA-256. Both runs
 ## Export modes and auto-poster format — 2026-11-02
 
 Added full, batch, minimal, and single-folder export selections. Carousel images now use `image-N.png`, and caption files use their containing carousel folder name. Updated existing filename expectations. Python parsing, JavaScript syntax, and diff whitespace checks passed. Processing and browser tests were not run for this change; earlier results above apply to the versions described there.
+
+## Separate export history — 2026-11-02
+
+Moved past batches to `/history`, linked from the main screen in a separate tab. The main screen shows active jobs and the current visit's latest started batch; the results section stays hidden when neither exists. The history page reuses export actions and the panel editor. Python parsing, JavaScript syntax, and diff whitespace checks passed; browser tests were not run for this change.

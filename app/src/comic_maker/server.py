@@ -88,7 +88,10 @@ def create_app(store=None,token=None):
     async def file_error(request,exc): return JSONResponse({'error':f'Could not access the file or folder: {exc}'},status_code=400)
 
     @app.get('/',response_class=HTMLResponse)
-    def index(): return (STATIC/'index.html').read_text().replace('__SESSION__',token)
+    @app.get('/history',response_class=HTMLResponse)
+    def index(request: Request):
+        page = 'history' if request.url.path == '/history' else 'main'
+        return (STATIC/'index.html').read_text().replace('__SESSION__',token).replace('__PAGE__',page)
 
     @app.get('/health/ready')
     def health(): return {'ok':True,'version':__version__}

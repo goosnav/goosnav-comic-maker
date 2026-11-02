@@ -10,6 +10,8 @@ Double-click **run.command** on macOS, or run `./run.sh`. First launch needs uv 
 2. Choose an **Export** mode, check the destination (the saved destination is ignored unless you picked one yourself, so the run always lands in your source folder by default) and press **Process comics**. It defaults to the first folder you choose (or the folder holding the first file), so the numbered run lands inside it. Choosing a destination yourself overrides this.
 3. Use **Open exports**, **Open all social**, **Open book prints**, **Open processed pages**, or **Open full-size pages** to collect the results.
 
+The main screen shows active processing and the most recent batch started there. **Export history** opens past batches in a separate tab, including their export, retry, and panel editing actions.
+
 Each batch creates a new numbered run. Failed comics do not stop the others. Estimated boundaries export with a **Needs review** flag. Refreshing the browser does not interrupt a batch; restarting the app resumes interrupted work. **Stop** takes effect between processing operations. **Retry unfinished** preserves completed stages whose output hashes still match.
 
 ## Export modes

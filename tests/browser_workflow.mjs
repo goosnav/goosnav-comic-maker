@@ -1,6 +1,7 @@
 /* Real browser regression suite for the two-panel fixture in scripts/verify.py.
    Run with the Codex cua_repl tab and browser viewport capability. The fixture
    must already be imported and exported in an isolated application state.
+   Open the Export history page before running this suite.
    Uses only visible DOM values, real input, and browser screenshots. */
 export default async function testPanelEditor(tab, viewport) {
   const passed=[];

@@ -1,8 +1,8 @@
 <!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="session" content="__SESSION__"><title>Goosnav Comic Maker</title><link rel="stylesheet" href="/static/style.css"><script src="/static/editor.js" defer></script><script src="/static/app.js" defer></script></head>
-<body>
-<header><a class="wordmark" href="/">GOOSNAV <span>COMIC MAKER</span></a><nav><button id="settings-open">Settings</button><button id="quit">Quit</button></nav></header>
+<body data-page="__PAGE__">
+<header><a class="wordmark" href="/">GOOSNAV <span>COMIC MAKER</span></a><nav><a id="history-link" href="/history" target="_blank" rel="noopener">Export history</a><button id="settings-open">Settings</button><button id="quit">Quit</button></nav></header>
 <main>
 <div id="notice" role="status" hidden></div>
 <section class="import"><h1>Process comics</h1><div class="import-bar"><button id="add-folder">Choose folder</button><button id="add-files">Choose files</button><label class="check"><input id="recursive" type="checkbox" checked> Include subfolders</label></div>
@@ -13,7 +13,8 @@
 <div class="destination" id="caption-options"><label for="lines">Caption lines</label><input id="lines" spellcheck="false" placeholder="Optional .txt file; one random line is saved with each stylized carousel"><button id="choose-lines">Choose .txt file</button></div>
 <div class="destination" id="ad-options"><label for="ad-folder">Ad images</label><input id="ad-folder" spellcheck="false" placeholder="Folder of ad images (png, jpg, tif, bmp, webp, gif)"><button id="choose-ad">Choose ad folder</button><label class="check"><input id="ad-on" type="checkbox"> Add random ad before summary</label></div>
 </section>
-<section class="batches"><div class="section-heading"><h2>Exports</h2></div><div id="jobs"><p class="empty">Processed comics will appear here.</p></div></section>
+<h1 id="history-title" hidden>Export history</h1>
+<section class="batches" id="export-results" hidden><div class="section-heading" id="export-heading"><h2>Current exports</h2></div><div id="jobs"></div></section>
 </main>
 <dialog id="settings-dialog"><form id="settings-form"><div class="dialog-heading"><h2>Settings</h2><button type="button" data-close="settings-dialog" aria-label="Close settings">×</button></div>
 <div class="settings-grid"><section><h3>Scan cleanup</h3><label for="ink-strength">Ink strength <output id="ink-value">50</output></label><input id="ink-strength" type="range" min="0" max="100" value="50"><p class="hint">Higher values retain fainter pencil strokes.</p><label for="cleanup">Dust removal <output id="cleanup-value">20</output></label><input id="cleanup" type="range" min="0" max="100" value="20"><label for="master-scale">Print enlargement</label><select id="master-scale"><option value="1">Native resolution</option><option value="2">2×</option><option value="3">3×</option><option value="4">4×</option></select><p class="hint">Native resolution retains all scan detail. Enlargement keeps the same print size.</p></section>
