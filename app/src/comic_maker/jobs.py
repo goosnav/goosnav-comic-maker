@@ -27,8 +27,9 @@ class Jobs:
         for job in reversed(self.list()):
             if job.get('schema_version') == 2 and job['status'] not in ('running','queued'):
                 root = Path(job['output'])
-                if root.is_dir() and (job.get('collection_version') != 1 or
-                    any(not (root/folder).is_dir() for folder in pipeline.COLLECTION_FOLDERS)):
+                settings = Settings.model_validate(job['settings'])
+                if root.is_dir() and (job.get('collection_version') != 2 or
+                    any(not (root/folder).is_dir() for folder in pipeline.collection_folders(settings))):
                     try:
                         self.refresh_collections(job)
                     except OSError as exc:
@@ -49,23 +50,22 @@ class Jobs:
     def refresh_collections(self, job):
         """Upgrade existing run collections from exports without reopening scans."""
         root = Path(job['output'])
-        for folder in pipeline.COLLECTION_FOLDERS:
+        settings = Settings.model_validate(job['settings'])
+        for folder in pipeline.collection_folders(settings):
             (root/folder).mkdir(exist_ok=True)
-        job.update(pipeline.print_collection_paths(root))
-        job['social_output'] = str(root/'all-social')
-        job['carousel_output'] = str(root/'all-social-carousels')
+        job.update(pipeline.export_paths(root, settings))
         for item in job['items']:
             result = item.get('result', {})
             if result.get('schema_version') != 2:
                 continue
-            result.update(pipeline.collect_prints(root, item['folder']))
-            if any((root/item['folder']).glob('stylized-carousel*/')):
-                result['social_files'] = pipeline.collect_social(root, item['folder'])
-            atomic_json(root/item['folder']/'manifest.json', result)
-        job['collection_version'] = 1
+            target = Path(result['output'])
+            result.update(pipeline.collect_prints(root, item['folder'], metadata=result, settings=settings, target=target))
+            result['social_files'] = pipeline.collect_social(root, item['folder'], settings=settings, target=target)
+            atomic_json(target/'manifest.json', result)
+        job['collection_version'] = 2
         job.pop('collection_error', None)
         self.save(job)
-        atomic_json(root/f'batch-{job["id"]}.json', job)
+        atomic_json(pipeline.working_root(root, settings, self.store)/f'batch-{job["id"]}.json', job)
 
     def save(self,job):
         with self.lock:
@@ -105,17 +105,17 @@ class Jobs:
         paths = [self.source(i) for i in dict.fromkeys(identifiers)]
         for path in paths:
             try:
-                imaging.validate_enlargement(path, settings.master_scale)
+                imaging.validate_enlargement(path, pipeline.print_scale(settings))
             except OSError:
                 pass  # An unreadable comic fails in the queue without blocking the others.
-        if settings.lines_file:
+        if 'stylized-carousel' in pipeline.export_phases(settings) and settings.lines_file:
             pipeline.read_lines(settings.lines_file)
-        if settings.ad_enabled:
+        if 'stylized-carousel' in pipeline.export_phases(settings) and settings.ad_enabled:
             pipeline.ad_images(settings.ad_folder)
-        target = pipeline.create_run(output)
+        target = pipeline.create_run(output, settings)
         names = pipeline.allocate_names(paths)
         job = {'id': uuid.uuid4().hex[:16], 'schema_version': 2, 'created': time.time(), 'stamp': time.strftime('%Y-%m-%d_%H%M'), 'status': 'queued',
-               'output': str(target), 'social_output': str(target/'all-social'), 'carousel_output': str(target/'all-social-carousels'), **pipeline.print_collection_paths(target), 'settings': settings.model_dump(),
+               'output': str(target), **pipeline.export_paths(target, settings), 'settings': settings.model_dump(),
                'cancel_requested': False, 'items': [
                    {'id': pipeline.source_id(p), 'source': str(p), 'name': p.name, 'folder': name,
                     'status': 'queued', 'stage': 'Waiting'} for p,name in zip(paths,names)]}
@@ -140,7 +140,7 @@ class Jobs:
             item.pop('boxes', None)
             job['cancel_requested'] = False
             job['status'] = 'queued'
-            job.update(pipeline.print_collection_paths(Path(job['output'])))
+            job.update(pipeline.export_paths(Path(job['output']), Settings.model_validate(job['settings'])))
             self.save(job)
         self.pool.submit(self.run, identifier)
         return job
@@ -156,7 +156,7 @@ class Jobs:
             if job.get('schema_version') != 2: raise ValueError('Import the originals for the new export workflow')
             if job['status'] in ('running','queued'): raise ValueError('Batch is already running')
             job['cancel_requested']=False;job['status']='queued'
-            job.update(pipeline.print_collection_paths(Path(job['output'])))
+            job.update(pipeline.export_paths(Path(job['output']), Settings.model_validate(job['settings'])))
             for item in job['items']:
                 if item['status'] in ('failed','cancelled','partial'): item['status']='queued';item['stage']='Waiting'
             self.save(job)
@@ -165,7 +165,7 @@ class Jobs:
 
     def run(self,identifier):
         job=self.get(identifier);settings=Settings.model_validate(job['settings'])
-        job.update(pipeline.print_collection_paths(Path(job['output'])))
+        job.update(pipeline.export_paths(Path(job['output']), settings))
         def check():
             if self.get(identifier)['cancel_requested']: raise Cancelled('Stopped after current operation')
         def persist():
@@ -180,8 +180,9 @@ class Jobs:
                     if item['status'] in ('complete','warning'):
                         result = item.get('result', {})
                         if result.get('schema_version') == 2:
-                            result.update(pipeline.collect_prints(Path(job['output']), item['folder'], check))
-                            result['social_files'] = pipeline.collect_social(Path(job['output']), item['folder'], check)
+                            target = Path(result['output'])
+                            result.update(pipeline.collect_prints(Path(job['output']), item['folder'], check, metadata=result, settings=settings, target=target))
+                            result['social_files'] = pipeline.collect_social(Path(job['output']), item['folder'], check, settings, target)
                             atomic_json(Path(result['output'])/'manifest.json', result)
                         persist()
                         continue
@@ -201,7 +202,7 @@ class Jobs:
                     persist();break
                 except Exception as exc:
                     item['status']='failed';item['stage']='Could not export';item['error']=f'{type(exc).__name__}: {exc}'
-                    manifest = Path(job['output'])/item.get('folder', pipeline.folder_name(Path(item['source']).stem))/'manifest.json'
+                    manifest = pipeline.working_root(Path(job['output']), settings, self.store)/item.get('folder', pipeline.folder_name(Path(item['source']).stem))/'manifest.json'
                     if manifest.exists():
                         try:
                             item['result'] = json.loads(manifest.read_text())
@@ -214,13 +215,13 @@ class Jobs:
                     item['status']='cancelled';item['stage']='Stopped'
             job['status']='cancelled' if self.get(identifier)['cancel_requested'] else 'partial' if any(i['status'] in ('failed','partial') for i in job['items']) else 'complete'
             if job['status'] == 'complete':
-                job['collection_version'] = 1
+                job['collection_version'] = 2
                 job.pop('collection_error', None)
         finally:
             if job['status']=='running': job['status']='partial'
             persist()
             # Readable batch report alongside individual manifests, with no credentials.
-            try: atomic_json(Path(job['output'])/f'batch-{identifier}.json',job)
+            try: atomic_json(pipeline.working_root(Path(job['output']), settings, self.store)/f'batch-{identifier}.json',job)
             except OSError: pass  # SQLite still retains the complete diagnostic record.
 
     def close(self):

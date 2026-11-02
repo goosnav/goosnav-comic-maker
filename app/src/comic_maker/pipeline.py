@@ -63,10 +63,40 @@ PRINT_COLLECTIONS = {
     'full-page': ('all-processed-pages', 'full-page', 'processed_page'),
 }
 COLLECTION_FOLDERS = {'all-social', 'all-social-carousels', 'all-full-size-pages', *(value[0] for value in PRINT_COLLECTIONS.values())}
+COLLECTION_OUTPUTS = {'all-social': 'social_output', 'all-social-carousels': 'carousel_output',
+                      'all-full-size-pages': 'full_size_page_output', 'all-book-prints': 'book_print_output',
+                      'all-processed-pages': 'processed_page_output'}
 
-def print_collection_paths(root):
-    return {**{prefix+'_output': str(root/folder) for folder, _, prefix in PRINT_COLLECTIONS.values()},
-            'full_size_page_output': str(root/'all-full-size-pages')}
+def collection_folders(settings=None):
+    settings = settings or Settings()
+    if settings.export_mode == 'minimal':
+        return {'all-social-carousels', 'all-full-size-pages'}
+    if settings.export_mode == 'single':
+        return {settings.single_output}
+    return COLLECTION_FOLDERS
+
+def export_paths(root, settings=None):
+    return {key: str(root/folder) for folder, key in COLLECTION_OUTPUTS.items() if folder in collection_folders(settings)}
+
+def working_root(root, settings, store):
+    # Compact exports keep queue and editor files in application storage.
+    return root if settings.export_mode == 'full' else store.root/'runs'/fingerprint(str(root.resolve()))[:24]
+
+def export_phases(settings):
+    if settings.export_mode == 'full':
+        return {'full-page', 'comic-crop', *SOCIAL_PHASES}
+    folders = collection_folders(settings)
+    phases = set()
+    if folders & {'all-processed-pages', 'all-full-size-pages'}: phases.add('full-page')
+    if 'all-book-prints' in folders: phases.add('comic-crop')
+    if folders & {'all-social', 'all-social-carousels'}: phases.add('stylized-carousel')
+    return phases
+
+def print_scale(settings):
+    return settings.master_scale if settings.export_mode == 'full' or collection_folders(settings) & {'all-book-prints', 'all-processed-pages'} else 1
+
+def print_collection_paths(root, settings=None):
+    return {key: value for key, value in export_paths(root, settings).items() if key not in ('social_output', 'carousel_output')}
 
 def fingerprint(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
@@ -166,7 +196,7 @@ def allocate_names(sources):
         names.append(name)
     return names
 
-def create_run(parent):
+def create_run(parent, settings=None):
     parent = Path(parent).expanduser().resolve()
     if parent.is_file():
         raise ValueError('Choose a destination folder')
@@ -177,7 +207,7 @@ def create_run(parent):
         try:
             root.mkdir()
             (root/'.comic-maker-export').touch()
-            for folder in COLLECTION_FOLDERS:
+            for folder in collection_folders(settings):
                 (root/folder).mkdir()
             return root
         except FileExistsError:
@@ -237,40 +267,50 @@ def _collect_files(target, expected, owned_pattern, check):
             path.unlink()
     return {name: digest(target/name) for name in expected}
 
-def _collect_carousels(root, comic_name, check):
-    """Whole stylized-carousel folders (slides, ad, caption) side by side, ready to drag and drop."""
-    for src in sorted((root/comic_name).glob('stylized-carousel*')):
-        if src.is_dir():
-            name = comic_name+'--'+src.name if src.name == 'stylized-carousel' else src.name
-            _collect_files(root/'all-social-carousels'/name,
-                           {p.name: p for p in src.iterdir() if p.is_file() and not p.name.startswith('.')}, r'.*', check)
+def carousel_slides(folder):
+    slides = [p for p in folder.glob('*.png') if re.fullmatch(r'image-\d+|\d+-(panel|ad|summary)', p.stem)]
+    return sorted(slides, key=lambda p: int(re.search(r'\d+', p.stem).group()))
 
-def collect_social(root, comic_name, check=lambda: None):
-    _collect_carousels(root, comic_name, check)
-    prefix = comic_name + '--'
-    expected = {prefix+'stylized-carousel--'+path.name: path
-                for path in sorted((root/comic_name).glob('stylized-carousel*/*.png'))}
-    return _collect_files(root/'all-social', expected,
-                          re.escape(prefix) + r'(regular-carousel|stylized-carousel)--\d+-(panel|ad|summary)\.png', check)
+def collect_social(root, comic_name, check=lambda: None, settings=None, target=None):
+    target = target or root/comic_name
+    folders = collection_folders(settings)
+    flat = {}
+    for src in sorted(target.glob('stylized-carousel*')):
+        if not src.is_dir():
+            continue
+        name = comic_name+'--'+src.name if src.name == 'stylized-carousel' else src.name
+        slides = {f'image-{i}.png': path for i, path in enumerate(carousel_slides(src), 1)}
+        if 'all-social-carousels' in folders:
+            caption = src/(src.name+'.txt')
+            if not caption.is_file(): caption = src/'caption.txt'
+            files = {**slides, **({name+'.txt': caption} if caption.is_file() else {})}
+            _collect_files(root/'all-social-carousels'/name, files, r'.*', check)
+        flat.update({comic_name+'--stylized-carousel--'+name: path for name, path in slides.items()})
+    if 'all-social' not in folders:
+        return {}
+    return _collect_files(root/'all-social', flat,
+                          re.escape(comic_name+'--') + r'(regular-carousel|stylized-carousel)--(\d+-(panel|ad|summary)|image-\d+)\.png', check)
 
-def collect_prints(root, comic_name, check=lambda: None, phase=None, metadata=None, page=None):
-    result = print_collection_paths(root)
+def collect_prints(root, comic_name, check=lambda: None, phase=None, metadata=None, page=None, settings=None, target=None):
+    target = target or root/comic_name
+    folders = collection_folders(settings)
+    result = print_collection_paths(root, settings)
     for name, (folder, stem, prefix) in PRINT_COLLECTIONS.items():
-        if phase is not None and phase != name:
+        if folder not in folders or (phase is not None and phase != name):
             continue
         expected = {}
         for ext in ('png', 'tif'):
-            source = root/comic_name/'print'/f'{stem}.{ext}'
+            source = target/'print'/f'{stem}.{ext}'
             if source.is_file():
                 expected[f'{comic_name}--{stem}.{ext}'] = source
         result[prefix+'_files'] = _collect_files(root/folder, expected,
             re.escape(comic_name+'--'+stem) + r'\.(png|tif)', check)
-    if phase in (None, 'full-page'):
-        master = root/comic_name/'print/full-page.tif'
+    if 'all-full-size-pages' in folders and phase in (None, 'full-page'):
+        master = target/'print/full-page.tif'
         if master.is_file():
             check()
             if metadata is None:
-                metadata = json.loads((root/comic_name/'manifest.json').read_text())
+                metadata = json.loads((target/'manifest.json').read_text())
             suffix = Path(metadata['source']).suffix
             filename = comic_name + suffix
             if page is None:
@@ -295,11 +335,11 @@ def _write_print(image, folder, stem, settings, dpi):
 def process(source: Path, export_root: Path, settings: Settings, store: Store,
             event=lambda stage: None, check=lambda: None, overrides=None, comic_name=None, number=1, stamp=None):
     export_root = validate_output(export_root, [source])
-    imaging.validate_enlargement(source, settings.master_scale)
+    imaging.validate_enlargement(source, print_scale(settings))
     sha = digest(source)
     if overrides is None:
         overrides = correction(source, store, sha).get('boxes')
-    target = export_root/(comic_name or folder_name(source.stem))
+    target = working_root(export_root, settings, store)/(comic_name or folder_name(source.stem))
     target.mkdir(parents=True, exist_ok=True)
     manifest_path = target/'manifest.json'
     try:
@@ -312,22 +352,33 @@ def process(source: Path, export_root: Path, settings: Settings, store: Store,
     if digest(source) != sha:
         raise ValueError('The scan changed during processing. Retry with the current scan.')
     boxes = [b.as_dict() for b in analysis.boxes]
-    page_recipe = fingerprint([sha, settings.ink_strength, settings.cleanup, settings.master_scale, COORDINATE_VERSION, __version__])
+    page_recipe = fingerprint([sha, settings.ink_strength, settings.cleanup, print_scale(settings), COORDINATE_VERSION, __version__])
     recipes = {'full-page': page_recipe,
                'comic-crop': fingerprint([page_recipe, boxes]),
-               'regular-carousel': fingerprint([sha, settings.ink_strength, settings.cleanup, boxes, settings.canvas_width, settings.layout, __version__]),
+               'regular-carousel': fingerprint([sha, settings.ink_strength, settings.cleanup, boxes, settings.canvas_width, settings.layout, __version__, 'autoposter-1']),
                'stylized-carousel': fingerprint([sha, settings.ink_strength, settings.cleanup, boxes, settings.canvas_width, settings.layout, settings.panel_grid_width, settings.summary_grid_width, __version__]
-                                                  + [x for x, on in (('ad', settings.ad_enabled), ('caption', bool(settings.lines_file))) if on])}
+                                                  + ['autoposter-1', settings.ad_folder if settings.ad_enabled else '', settings.lines_file])}
+    recipes = {phase: recipe for phase, recipe in recipes.items() if phase in export_phases(settings)}
+    carousel = stylized_folder(target, number, stamp)
+    collected_carousel = target.name+'--'+carousel if carousel == 'stylized-carousel' else carousel
+    summary_phase = 'regular-carousel' if 'regular-carousel' in recipes else 'stylized-carousel'
+    summary_folder = 'regular-carousel' if summary_phase == 'regular-carousel' else carousel
+    summary_slot = len(boxes)+1+(1 if summary_phase == 'stylized-carousel' and settings.ad_enabled else 0)
+    public_output = target if settings.export_mode == 'full' else export_root
+    if settings.export_mode != 'full' and 'all-social-carousels' in collection_folders(settings):
+        public_output = export_root/'all-social-carousels'/collected_carousel
     result = {'schema_version': SCHEMA_VERSION, 'recipe_version': SCHEMA_VERSION, 'app_version': __version__, 'source': str(source), 'source_sha256': sha,
               'coordinate_version': COORDINATE_VERSION, 'settings': settings.model_dump(), 'size': list(clean.size), 'dpi': dpi,
               'boxes': boxes, 'angle': analysis.angle, 'method': analysis.method, 'panel_count': len(boxes),
               'warnings': analysis.warnings, 'needs_review': bool(analysis.warnings), 'status': 'partial',
               'output': str(target), 'stages': {phase:{**previous.get('stages',{}).get(phase,{}), 'status': 'complete' if previous.get('stages',{}).get(phase,{}).get('recipe') == recipe else 'pending'} for phase,recipe in recipes.items()}, 'files': previous.get('files', {}),
-              'social_output': str(export_root/'all-social'), 'carousel_output': str(export_root/'all-social-carousels'), **print_collection_paths(export_root),
+              **export_paths(export_root, settings),
+              'public_output': str(public_output),
+              'summary_file': f'{summary_folder}/image-{summary_slot}.png' if summary_phase in recipes else None,
               'layout': imaging.layout_base.choose_layout(analysis.boxes, settings.layout)}
     def checkpoint():
         result['files'] = {str(p.relative_to(target)): digest(p) for p in sorted(target.rglob('*'))
-                           if p.is_file() and not any(part.startswith('.') for part in p.relative_to(target).parts) and p.suffix in ('.png','.tif')}
+                           if p.is_file() and not any(part.startswith('.') for part in p.relative_to(target).parts) and p.suffix in ('.png','.tif','.txt')}
         atomic_json(manifest_path, result)
     skipped = 0
     try:
@@ -344,30 +395,30 @@ def process(source: Path, export_root: Path, settings: Settings, store: Store,
             if old.get('recipe') == recipe and old.get('files') and all((target/name).is_file() and digest(target/name) == value for name,value in old['files'].items()):
                 skipped += 1
                 if phase in PRINT_COLLECTIONS:
-                    result.update(collect_prints(export_root, target.name, check, phase, result, clean))
+                    result.update(collect_prints(export_root, target.name, check, phase, result, clean, settings, target))
                     checkpoint()
                 continue
             event({'full-page':'Exporting print page','comic-crop':'Exporting print crop','regular-carousel':'Making regular carousel','stylized-carousel':'Making stylized carousel'}[phase])
             temporary = Path(tempfile.mkdtemp(prefix='.working-', dir=target))
             try:
                 if phase == 'full-page':
-                    _write_print(clean, temporary, 'full-page', settings, dpi)
+                    _write_print(clean, temporary, 'full-page', settings.model_copy(update={'master_scale': print_scale(settings)}), dpi)
                 elif phase == 'comic-crop':
                     _write_print(clean.crop(imaging.crop_bounds(analysis.boxes, clean.size)), temporary, 'comic', settings, dpi)
                 else:
                     styled = phase == 'stylized-carousel'
                     for i, box in enumerate(analysis.boxes, 1):
                         check()
-                        imaging.save(imaging.panel_canvas(imaging.crop_panel(clean, box), settings, styled), temporary/f'{i:02d}-panel.png')
+                        imaging.save(imaging.panel_canvas(imaging.crop_panel(clean, box), settings, styled), temporary/f'image-{i}.png')
                     summary, layout = imaging.summary_canvas(clean, analysis.boxes, settings, styled)
                     result['layout'] = layout
                     slot = len(boxes)+1
                     if styled and settings.ad_enabled:
-                        write_ad(settings.ad_folder, temporary/f'{slot:02d}-ad.png')
+                        write_ad(settings.ad_folder, temporary/f'image-{slot}.png')
                         slot += 1
-                    imaging.save(summary, temporary/f'{slot:02d}-summary.png')
+                    imaging.save(summary, temporary/f'image-{slot}.png')
                     if styled and settings.lines_file:
-                        (temporary/'caption.txt').write_text(random.choice(read_lines(settings.lines_file))+'\n', encoding='utf-8')
+                        (temporary/(folder.name+'.txt')).write_text(random.choice(read_lines(settings.lines_file))+'\n', encoding='utf-8')
                 check()
                 if phase in ('full-page','comic-crop'):
                     folder.mkdir(exist_ok=True)
@@ -383,13 +434,13 @@ def process(source: Path, export_root: Path, settings: Settings, store: Store,
                         shutil.rmtree(backup)
                 result['stages'][phase] = {'status':'complete', 'recipe':recipe, 'files': {str((folder/name).relative_to(target)):digest(folder/name) for name in names}}
                 if phase in PRINT_COLLECTIONS:
-                    result.update(collect_prints(export_root, target.name, check, phase, result, clean))
+                    result.update(collect_prints(export_root, target.name, check, phase, result, clean, settings, target))
                 checkpoint()
             finally:
                 if temporary.exists():
                     shutil.rmtree(temporary)
         check(); event('Collecting social slides')
-        result['social_files'] = collect_social(export_root, target.name, check)
+        result['social_files'] = collect_social(export_root, target.name, check, settings, target)
         result['status'] = 'complete'
         result['cached'] = skipped == len(recipes)
         result.pop('error', None)

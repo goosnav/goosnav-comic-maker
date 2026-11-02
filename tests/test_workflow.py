@@ -47,12 +47,12 @@ def test_exports_resolution_dpi_modes_source_and_collection(tmp_path):
             assert image.width<1200 and image.height<800
     for phase in pipeline.SOCIAL_PHASES:
         names=sorted((next(root.joinpath('scan').glob('stylized-carousel-*')) if phase=='stylized-carousel' else root/'scan'/phase).glob('*.png'))
-        assert [p.name for p in names]==['01-panel.png','02-panel.png','03-summary.png']
+        assert [p.name for p in names]==['image-1.png','image-2.png','image-3.png']
         for p in names:
             with Image.open(p) as image:
                 assert image.size==(2160,2700)
                 if phase=='stylized-carousel':assert image.mode=='1'
-    with Image.open(root/'scan'/'regular-carousel'/'01-panel.png') as image:
+    with Image.open(root/'scan'/'regular-carousel'/'image-1.png') as image:
         assert image.mode=='L' and len(image.getcolors(256))>2
     assert len(result['social_files'])==3
     for name in result['social_files']:
@@ -176,7 +176,7 @@ def test_regeneration_reuses_page_updates_collected_files_and_removes_old_slides
         assert page_copy_before==(pipeline.digest(collected_page),collected_page.stat().st_mtime_ns)
         assert pipeline.digest(crop_copy)!=crop_before
         assert pipeline.digest(crop_copy)==pipeline.digest(target/'print/comic.png')
-        assert not (target/'regular-carousel/03-summary.png').exists()
+        assert not (target/'regular-carousel/image-3.png').exists()
         assert len(list(Path(job['social_output']).glob('*.png')))==2
         for path in Path(job['social_output']).glob('*.png'):
             assert pipeline.digest(path)==updated['items'][0]['result']['social_files'][path.name]
@@ -188,13 +188,13 @@ def test_stage_hashes_repair_only_damaged_files(tmp_path):
     first=pipeline.process(source,root,Settings(),store)
     assert pipeline.process(source,root,Settings(),store)['cached']
     page=root/'scan/print/full-page.png';mtime=page.stat().st_mtime_ns
-    damaged=next(root.joinpath('scan').glob('stylized-carousel-*'))/'01-panel.png';damaged.write_bytes(b'broken')
+    damaged=next(root.joinpath('scan').glob('stylized-carousel-*'))/'image-1.png';damaged.write_bytes(b'broken')
     repaired=pipeline.process(source,root,Settings(),store)
     assert not repaired['cached'] and page.stat().st_mtime_ns==mtime
     with Image.open(damaged) as image:assert image.size==(2160,2700)
     social=root/'all-social'/next(iter(repaired['social_files']));social.write_bytes(b'broken')
     old_copy=root/'all-social/scan--regular-carousel--01-panel.png'
-    old_copy.write_bytes((root/'scan/regular-carousel/01-panel.png').read_bytes())
+    old_copy.write_bytes((root/'scan/regular-carousel/image-1.png').read_bytes())
     assert pipeline.process(source,root,Settings(),store)['cached']
     assert pipeline.digest(social)==repaired['social_files'][social.name]
     assert not old_copy.exists()
@@ -237,11 +237,11 @@ def test_duplicate_names_get_distinct_collected_copies(tmp_path):
             completed.pop(prefix+'_output',None)
         completed.pop('collection_version', None)
         old_copy=social/'Comic A--regular-carousel--01-panel.png'
-        old_copy.write_bytes((Path(completed['items'][0]['result']['output'])/'regular-carousel/01-panel.png').read_bytes())
+        old_copy.write_bytes((Path(completed['items'][0]['result']['output'])/'regular-carousel/image-1.png').read_bytes())
         jobs.save(completed);jobs.close()
         jobs=Jobs(Store(tmp_path/'state'))
         reopened=jobs.get(job['id'])
-        assert reopened['collection_version']==1 and not old_copy.exists()
+        assert reopened['collection_version']==2 and not old_copy.exists()
         assert untouched.stat().st_mtime_ns==untouched_mtime
         for folder, stem, prefix in pipeline.PRINT_COLLECTIONS.values():
             assert len(list((Path(job['output'])/folder).iterdir()))==4
@@ -379,16 +379,16 @@ def test_stylized_folders_are_stamped_numbered_captioned_and_collected(tmp_path)
         source=tmp_path/f'scan{number}.png';drawing(source)
         pipeline.process(source,root,settings,store,number=number,stamp='2026-10-17_1032')
         folder=root/f'scan{number}'/f'stylized-carousel-2026-10-17_1032-{number:02d}'
-        assert (folder/'01-panel.png').is_file() and not (root/f'scan{number}/stylized-carousel').exists()
-        assert (folder/'caption.txt').read_text().strip() in ('first line','second line','third line')
+        assert (folder/'image-1.png').is_file() and not (root/f'scan{number}/stylized-carousel').exists()
+        assert (folder/(folder.name+'.txt')).read_text().strip() in ('first line','second line','third line')
         assert not [p for p in folder.iterdir() if p.is_dir()]
         assert pipeline.process(source,root,settings,store,number=number,stamp='other')['cached']
         copy=root/'all-social-carousels'/folder.name
         assert sorted(p.name for p in copy.iterdir())==sorted(p.name for p in folder.iterdir())
-        assert pipeline.digest(copy/'caption.txt')==pipeline.digest(folder/'caption.txt')
+        assert pipeline.digest(copy/(copy.name+'.txt'))==pipeline.digest(folder/(folder.name+'.txt'))
     assert len(list((root/'all-social').glob('*.png')))==6
     plain=pipeline.process(tmp_path/'scan1.png',pipeline.create_run(tmp_path/'out'),Settings(),store)
-    assert not list(Path(plain['output']).glob('stylized-carousel*/caption.txt'))
+    assert not list(Path(plain['output']).glob('stylized-carousel*/*.txt'))
     with pytest.raises(ValueError):pipeline.read_lines(tmp_path/'missing.txt')
 
 
@@ -404,9 +404,9 @@ def test_random_ad_image_is_added_before_the_summary(tmp_path):
     source=tmp_path/'scan.png';drawing(source);store=Store(tmp_path/'state');root=pipeline.create_run(tmp_path/'out')
     result=pipeline.process(source,root,Settings(ad_enabled=True,ad_folder=str(ads)),store)
     folder=next(root.joinpath('scan').glob('stylized-carousel-*'))
-    assert sorted(p.name for p in folder.glob('*.png'))==['01-panel.png','02-panel.png','03-ad.png','04-summary.png']
-    assert (root/'all-social-carousels'/folder.name/'03-ad.png').is_file() and len(result['social_files'])==4
-    assert not (root/'scan/regular-carousel/03-ad.png').exists()
+    assert sorted(p.name for p in folder.glob('*.png'))==['image-1.png','image-2.png','image-3.png','image-4.png']
+    assert (root/'all-social-carousels'/folder.name/'image-3.png').is_file() and len(result['social_files'])==4
+    assert not (root/'scan/regular-carousel/image-4.png').exists()
     with pytest.raises(ValueError):pipeline.ad_images(tmp_path/'empty')
     with pytest.raises(ValueError):pipeline.ad_images('')
 

@@ -7,10 +7,33 @@ Double-click **run.command** on macOS, or run `./run.sh`. First launch needs uv 
 ## Daily use
 
 1. **Choose folder** or **Choose files**. Set **Include subfolders** as needed. You can also paste paths.
-2. Check the destination (the saved destination is ignored unless you picked one yourself, so the run always lands in your source folder by default) and press **Process comics**. It defaults to the first folder you choose (or the folder holding the first file), so the numbered run lands inside it. Choosing a destination yourself overrides this.
+2. Choose an **Export** mode, check the destination (the saved destination is ignored unless you picked one yourself, so the run always lands in your source folder by default) and press **Process comics**. It defaults to the first folder you choose (or the folder holding the first file), so the numbered run lands inside it. Choosing a destination yourself overrides this.
 3. Use **Open exports**, **Open all social**, **Open book prints**, **Open processed pages**, or **Open full-size pages** to collect the results.
 
 Each batch creates a new numbered run. Failed comics do not stop the others. Estimated boundaries export with a **Needs review** flag. Refreshing the browser does not interrupt a batch; restarting the app resumes interrupted work. **Stop** takes effect between processing operations. **Retry unfinished** preserves completed stages whose output hashes still match.
+
+## Export modes
+
+- **Full:** per-comic folders, all collection folders, and manifests (the previous layout).
+- **Batch:** only the five collection folders: book crops, PNG/TIFF pages, original-format filtered pages, flat social images, and carousel folders.
+- **Minimal:** only `all-social-carousels` and `all-full-size-pages`.
+- **Single folder:** choose filtered pages, carousel folders, book crops, PNG/TIFF pages, or flat social images.
+
+Every mode creates a new numbered run beneath the destination. The selection is remembered for the next batch. Compact modes keep manifests and working files in local app storage, so their exports contain only the selected folders. Editing and retrying use the original batch's mode. Unselected processing stages are skipped. Print enlargement does not affect the original-format filtered pages.
+
+For posting, choose **Single folder → Social carousel folders**, then drag the child folders from `all-social-carousels` into Drive:
+
+```text
+all-social-carousels/
+  stylized-carousel-2026-11-02_1032-01/
+    image-1.png
+    image-2.png
+    image-3.png      (ad, if enabled)
+    image-4.png      (summary)
+    stylized-carousel-2026-11-02_1032-01.txt
+```
+
+The caption filename is the exact name of its containing carousel folder plus `.txt`. Slides are numbered without padding or descriptions. The summary is last; an enabled ad is second to last. Caption files are created when a caption source is selected. Existing collected carousels are brought into this format when the app opens.
 
 ## Print and social quality
 
@@ -19,9 +42,9 @@ Each batch creates a new numbered run. Failed comics do not stop the others. Est
 - **Regular carousel:** one 2160 × 2700 slide per panel, followed by a summary. High-quality resizing retains fine strokes.
 - **Stylized carousel:** Red Sun black-and-white processing applied separately to full-resolution cleaned panel crops. Defaults are 512 pixels across each panel's artwork and 1024 across each summary panel's artwork. Final fitting uses nearest-neighbor resizing without dithering or gray fringes.
 
-**Caption lines:** pick a .txt file on the main screen (remembered between launches). Each stylized carousel folder gets a `caption.txt` holding one randomly chosen non-blank line from it. Stylized folders are named `stylized-carousel-<date>_<time>-<NN>`; NN is the comic's position in the run. Leave the field blank to skip captions.
+**Caption lines:** pick a .txt file on the main screen (remembered between launches). Each stylized carousel folder gets a `<carousel-folder-name>.txt` holding one randomly chosen non-blank line from it. Stylized folders are named `stylized-carousel-<date>_<time>-<NN>`; NN is the comic's position in the run. Leave the field blank to skip captions.
 
-**Ad slide:** tick *Add random ad before summary* and choose a folder of images (png, jpg, tif, bmp, webp, gif). One random image per comic is saved as `NN-ad.png` right before the summary, and the summary shifts to the next number. It applies to the stylized carousel only. Non-PNG images are converted to PNG; PNGs are copied unchanged.
+**Ad slide:** tick *Add random ad before summary* and choose a folder of images (png, jpg, tif, bmp, webp, gif). One random image per comic is saved as `image-N.png` right before the summary, and the summary shifts to the next number. It applies to the stylized carousel only. Non-PNG images are converted to PNG; PNGs are copied unchanged.
 
 `all-social-carousels` holds a complete copy of every stylized folder (slides, ad, caption) so you can drag them all at once.
 
@@ -43,7 +66,7 @@ Open **Edit panels** on an imported comic or a completed result. Saved boundarie
 
 Frame editing changes crop regions. It does not redraw visible border lines. Corrections are tied to source content and coordinate version; a changed source invalidates them.
 
-## Export folders
+## Full export folders
 
 ```text
 comic-maker-run-001/
@@ -54,15 +77,15 @@ comic-maker-run-001/
       comic.png
       comic.tif
     regular-carousel/
-      01-panel.png
-      02-panel.png
-      03-summary.png
+      image-1.png
+      image-2.png
+      image-3.png
     stylized-carousel-2026-10-17_1032-01/
-      01-panel.png
-      02-panel.png
-      03-ad.png            (only with the ad toggle)
-      04-summary.png
-      caption.txt          (only with a caption file)
+      image-1.png
+      image-2.png
+      image-3.png            (only with the ad toggle)
+      image-4.png
+      stylized-carousel-2026-10-17_1032-01.txt (only with a caption file)
     manifest.json
   Comic A-2/
     ...
@@ -80,9 +103,9 @@ comic-maker-run-001/
     Comic A.tiff            (same format as its source scan)
     Comic A-2.jpg
   all-social/
-    Comic A--stylized-carousel--01-panel.png
-    Comic A--stylized-carousel--02-panel.png
-    Comic A--stylized-carousel--03-summary.png
+    Comic A--stylized-carousel--image-1.png
+    Comic A--stylized-carousel--image-2.png
+    Comic A--stylized-carousel--image-3.png
     ...
   all-social-carousels/
     stylized-carousel-2026-10-17_1032-01/   (full copy of each comic's folder)
@@ -90,7 +113,7 @@ comic-maker-run-001/
   batch-<id>.json
 ```
 
-`all-full-size-pages` contains one cleaned, uncropped page per comic in its original image format and native pixel dimensions, regardless of print enlargement. Source DPI is retained where the format supports it (600 DPI if missing). JPEG sources use maximum-quality JPEG output. Existing runs fill this folder from their saved full-page print masters when the app opens.
+`all-full-size-pages` contains one cleaned, uncropped page per comic in its original image format and native pixel dimensions, regardless of print enlargement. Source DPI is retained where the format supports it (600 DPI if missing). JPEG sources use maximum-quality JPEG output. Existing runs fill this folder from their saved full-page print masters when the app opens, if the batch includes this collection.
 
 `all-book-prints` collects the cleaned comic-only crops; `all-processed-pages` collects the cleaned full scans. Both contain byte-identical PNG and TIFF copies, retaining print dimensions and DPI. Completed print stages are collected even if a later carousel stage fails. Regeneration refreshes the affected copies; restarting or retrying also repairs missing copies. Opening the app fills in missing collections for existing version 2 runs from saved exports.
 

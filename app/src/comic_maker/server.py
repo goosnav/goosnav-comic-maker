@@ -197,7 +197,8 @@ def create_app(store=None,token=None):
             path = job[key]
         if body.get('source'):
             item=next((i for i in job['items'] if i['id']==body['source']),None)
-            path=(item or {}).get('result',{}).get('output',path)
+            result = (item or {}).get('result',{})
+            path = result.get('public_output', result.get('output', path))
         command=['open',path] if sys.platform=='darwin' else ['explorer',path] if sys.platform=='win32' else ['xdg-open',path]
         subprocess.Popen(command,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
         return {'ok':True}

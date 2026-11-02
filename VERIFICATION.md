@@ -86,3 +86,7 @@ Launched the actual application through `run.command` against the artist's histo
 | comic-maker-run-002 | 18 | 75 | 36 | 36 |
 
 All 192 collected copies matched their per-comic originals by SHA-256. Both runs had zero regular slides in `all-social`. All existing per-comic output hashes were unchanged. Through the actual GUI, Open book prints opened the latest run's 36-file collection in Finder; Open exports showed all three collection folders. Schema 1 exports were left unchanged.
+
+## Export modes and auto-poster format — 2026-11-02
+
+Added full, batch, minimal, and single-folder export selections. Carousel images now use `image-N.png`, and caption files use their containing carousel folder name. Updated existing filename expectations. Python parsing, JavaScript syntax, and diff whitespace checks passed. Processing and browser tests were not run for this change; earlier results above apply to the versions described there.

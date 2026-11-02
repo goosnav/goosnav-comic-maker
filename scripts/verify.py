@@ -68,7 +68,7 @@ def main():
                     for name in item['files']:
                         with Image.open(Path(item['output'])/name) as im:
                             im.verify()
-                    url=f'/api/artifact/{job["id"]}/{identifier}/regular-carousel/03-summary.png'
+                    url=f'/api/artifact/{job["id"]}/{identifier}/regular-carousel/image-3.png'
                     assert client.get(url).status_code==200
                     # A launcher must replace an idle process from before a code update.
                     instance_path=work/'state/instance.json'

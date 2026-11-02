@@ -8,6 +8,12 @@
 
 Each GUI batch creates a numbered run and stable, collision-free comic names. Completed phases are hash-checked on retries. Social directories are replaced through prepared staging directories with recoverable backups. Print files are prepared before replacement. Collected social, book-print crop, and processed-page copies are derived outputs and can be repaired independently. Print copies become available as each print phase finishes, preserve PNG/TIFF bytes and DPI, and refresh during regeneration. Opening the app backfills missing print collections in existing runs and removes regular slides from `all-social`; only Red Sun stylized slides are collected. Relaunching after a code change restarts an idle instance so exports use the current code. An active batch is allowed to finish. Existing schema 1 exports are readable and left unchanged.
 
+## Export selection and poster filenames
+
+Settings store `export_mode` (full, batch, minimal, single) and `single_output`. `collection_folders`, `export_paths`, and `export_phases` apply the same selection in GUI, CLI, retry, and restart recovery. Full mode retains the existing layout. Other modes put working files and manifests under the app's `runs` directory, keyed by the numbered export run, and publish only selected collections. Settings stored with a job govern regeneration. Original-format-only exports ignore print enlargement and unused caption/ad paths.
+
+Carousel slides use `image-1.png` through the final summary; an optional ad occupies the preceding slot. Caption filenames match their immediate carousel directory. Collection version 2 normalizes older collected carousels, including legacy folder names, without changing the saved print masters. Social recipes include the poster-format revision. Results identify their summary file explicitly so the UI does not depend on descriptive image names.
+
 ## Queue and corrections
 
 `jobs.py` retains the SQLite queue and single image worker. Jobs persist their run location and per-comic status. Restart recovery requeues unfinished schema 2 items. Regeneration queues only the requested comic within the original run. Failures and uncertain estimates remain visible without blocking the rest of a batch.

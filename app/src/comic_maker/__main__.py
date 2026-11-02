@@ -63,10 +63,13 @@ def main():
         for path in files:
             try:
                 from .imaging import validate_enlargement
-                validate_enlargement(path, settings.master_scale)
+                validate_enlargement(path, pipeline.print_scale(settings))
             except OSError:
                 pass
-        root = pipeline.create_run(args.out) if files else None
+        if 'stylized-carousel' in pipeline.export_phases(settings):
+            if settings.lines_file: pipeline.read_lines(settings.lines_file)
+            if settings.ad_enabled: pipeline.ad_images(settings.ad_folder)
+        root = pipeline.create_run(args.out, settings) if files else None
         results=[]
         for number,(path,name) in enumerate(zip(files,pipeline.allocate_names(files)),1):
             try: results.append(pipeline.process(path,root,settings,store,comic_name=name,number=number))
@@ -74,7 +77,7 @@ def main():
         report={'results':results,'warnings':warnings,'output':str(root) if root else None}
         if args.json: print(json.dumps(report))
         else:
-            for item in results: print(f'{Path(item["source"]).name}: {item["status"]} — {item.get("output",item.get("error"))}')
+            for item in results: print(f'{Path(item["source"]).name}: {item["status"]} — {item.get("public_output",item.get("output",item.get("error")))}')
             for warning in warnings: print(warning)
         return 0 if files and not warnings and all(r['status']=='complete' for r in results) else 2
     import uvicorn
