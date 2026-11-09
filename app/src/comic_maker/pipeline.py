@@ -64,6 +64,7 @@ PRINT_COLLECTIONS = {
 }
 COLLECTION_FOLDERS = {'all-social', 'all-social-carousels', 'all-full-size-pages', *(value[0] for value in PRINT_COLLECTIONS.values())}
 COLLECTION_OUTPUTS = {'all-social': 'social_output', 'all-social-carousels': 'carousel_output',
+                      'all-social-summaries': 'summary_output',
                       'all-full-size-pages': 'full_size_page_output', 'all-book-prints': 'book_print_output',
                       'all-processed-pages': 'processed_page_output'}
 
@@ -90,13 +91,14 @@ def export_phases(settings):
     if folders & {'all-processed-pages', 'all-full-size-pages'}: phases.add('full-page')
     if 'all-book-prints' in folders: phases.add('comic-crop')
     if folders & {'all-social', 'all-social-carousels'}: phases.add('stylized-carousel')
+    if 'all-social-summaries' in folders: phases.add('stylized-summary')
     return phases
 
 def print_scale(settings):
     return settings.master_scale if settings.export_mode == 'full' or collection_folders(settings) & {'all-book-prints', 'all-processed-pages'} else 1
 
 def print_collection_paths(root, settings=None):
-    return {key: value for key, value in export_paths(root, settings).items() if key not in ('social_output', 'carousel_output')}
+    return {key: value for key, value in export_paths(root, settings).items() if key not in ('social_output', 'carousel_output', 'summary_output')}
 
 def fingerprint(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
@@ -185,7 +187,7 @@ def folder_name(name):
 
 def allocate_names(sources):
     names = []
-    used = set(COLLECTION_FOLDERS)
+    used = set(COLLECTION_OUTPUTS)
     for source in sources:
         base = folder_name(source.stem)
         name, n = base, 2
@@ -275,17 +277,22 @@ def collect_social(root, comic_name, check=lambda: None, settings=None, target=N
     target = target or root/comic_name
     folders = collection_folders(settings)
     flat = {}
+    summaries = {}
     for src in sorted(target.glob('stylized-carousel*')):
         if not src.is_dir():
             continue
         name = comic_name+'--'+src.name if src.name == 'stylized-carousel' else src.name
         slides = {f'image-{i}.png': path for i, path in enumerate(carousel_slides(src), 1)}
+        if 'all-social-summaries' in folders and slides:
+            summaries[comic_name+'.png'] = list(slides.values())[-1]
         if 'all-social-carousels' in folders:
             caption = src/(src.name+'.txt')
             if not caption.is_file(): caption = src/'caption.txt'
             files = {**slides, **({name+'.txt': caption} if caption.is_file() else {})}
             _collect_files(root/'all-social-carousels'/name, files, r'.*', check)
         flat.update({comic_name+'--stylized-carousel--'+name: path for name, path in slides.items()})
+    if 'all-social-summaries' in folders:
+        return _collect_files(root/'all-social-summaries', summaries, re.escape(comic_name)+r'\.png', check)
     if 'all-social' not in folders:
         return {}
     return _collect_files(root/'all-social', flat,
@@ -358,12 +365,14 @@ def process(source: Path, export_root: Path, settings: Settings, store: Store,
                'regular-carousel': fingerprint([sha, settings.ink_strength, settings.cleanup, boxes, settings.canvas_width, settings.layout, __version__, 'autoposter-1']),
                'stylized-carousel': fingerprint([sha, settings.ink_strength, settings.cleanup, boxes, settings.canvas_width, settings.layout, settings.panel_grid_width, settings.summary_grid_width, __version__]
                                                   + ['autoposter-1', settings.ad_folder if settings.ad_enabled else '', settings.lines_file])}
+    recipes['stylized-summary'] = fingerprint([sha, settings.ink_strength, settings.cleanup, boxes,
+        settings.canvas_width, settings.layout, settings.summary_grid_width, __version__, 'summary-only-1'])
     recipes = {phase: recipe for phase, recipe in recipes.items() if phase in export_phases(settings)}
     carousel = stylized_folder(target, number, stamp)
     collected_carousel = target.name+'--'+carousel if carousel == 'stylized-carousel' else carousel
-    summary_phase = 'regular-carousel' if 'regular-carousel' in recipes else 'stylized-carousel'
+    summary_phase = 'regular-carousel' if 'regular-carousel' in recipes else 'stylized-summary' if 'stylized-summary' in recipes else 'stylized-carousel'
     summary_folder = 'regular-carousel' if summary_phase == 'regular-carousel' else carousel
-    summary_slot = len(boxes)+1+(1 if summary_phase == 'stylized-carousel' and settings.ad_enabled else 0)
+    summary_slot = 1 if summary_phase == 'stylized-summary' else len(boxes)+1+(1 if summary_phase == 'stylized-carousel' and settings.ad_enabled else 0)
     public_output = target if settings.export_mode == 'full' else export_root
     if settings.export_mode != 'full' and 'all-social-carousels' in collection_folders(settings):
         public_output = export_root/'all-social-carousels'/collected_carousel
@@ -384,7 +393,7 @@ def process(source: Path, export_root: Path, settings: Settings, store: Store,
     try:
         for phase, recipe in recipes.items():
             check()
-            folder = target/('print' if phase in ('full-page','comic-crop') else stylized_folder(target, number, stamp) if phase == 'stylized-carousel' else phase)
+            folder = target/('print' if phase in ('full-page','comic-crop') else carousel if phase in ('stylized-carousel','stylized-summary') else phase)
             backup = target/('.previous-'+phase)
             if backup.exists():
                 if not folder.exists():
@@ -398,7 +407,7 @@ def process(source: Path, export_root: Path, settings: Settings, store: Store,
                     result.update(collect_prints(export_root, target.name, check, phase, result, clean, settings, target))
                     checkpoint()
                 continue
-            event({'full-page':'Exporting print page','comic-crop':'Exporting print crop','regular-carousel':'Making regular carousel','stylized-carousel':'Making stylized carousel'}[phase])
+            event({'full-page':'Exporting print page','comic-crop':'Exporting print crop','regular-carousel':'Making regular carousel','stylized-carousel':'Making stylized carousel','stylized-summary':'Making summary slide'}[phase])
             temporary = Path(tempfile.mkdtemp(prefix='.working-', dir=target))
             try:
                 if phase == 'full-page':
@@ -406,18 +415,20 @@ def process(source: Path, export_root: Path, settings: Settings, store: Store,
                 elif phase == 'comic-crop':
                     _write_print(clean.crop(imaging.crop_bounds(analysis.boxes, clean.size)), temporary, 'comic', settings, dpi)
                 else:
-                    styled = phase == 'stylized-carousel'
-                    for i, box in enumerate(analysis.boxes, 1):
-                        check()
-                        imaging.save(imaging.panel_canvas(imaging.crop_panel(clean, box), settings, styled), temporary/f'image-{i}.png')
+                    styled = phase in ('stylized-carousel','stylized-summary')
+                    summary_only = phase == 'stylized-summary'
+                    if not summary_only:
+                        for i, box in enumerate(analysis.boxes, 1):
+                            check()
+                            imaging.save(imaging.panel_canvas(imaging.crop_panel(clean, box), settings, styled), temporary/f'image-{i}.png')
                     summary, layout = imaging.summary_canvas(clean, analysis.boxes, settings, styled)
                     result['layout'] = layout
-                    slot = len(boxes)+1
-                    if styled and settings.ad_enabled:
+                    slot = 1 if summary_only else len(boxes)+1
+                    if styled and not summary_only and settings.ad_enabled:
                         write_ad(settings.ad_folder, temporary/f'image-{slot}.png')
                         slot += 1
                     imaging.save(summary, temporary/f'image-{slot}.png')
-                    if styled and settings.lines_file:
+                    if styled and not summary_only and settings.lines_file:
                         (temporary/(folder.name+'.txt')).write_text(random.choice(read_lines(settings.lines_file))+'\n', encoding='utf-8')
                 check()
                 if phase in ('full-page','comic-crop'):

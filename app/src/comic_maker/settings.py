@@ -22,7 +22,7 @@ class Settings(BaseModel):
     ad_enabled: bool = False
     ad_folder: str = ''
     export_mode: Literal['full', 'batch', 'minimal', 'single'] = 'full'
-    single_output: Literal['all-full-size-pages', 'all-social-carousels', 'all-book-prints', 'all-processed-pages', 'all-social'] = 'all-full-size-pages'
+    single_output: Literal['all-full-size-pages', 'all-social-carousels', 'all-social-summaries', 'all-book-prints', 'all-processed-pages', 'all-social'] = 'all-full-size-pages'
 
 def data_root() -> Path:
     if os.environ.get('COMIC_MAKER_DATA'):

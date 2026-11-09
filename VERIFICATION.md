@@ -94,3 +94,7 @@ Added full, batch, minimal, and single-folder export selections. Carousel images
 ## Separate export history — 2026-11-02
 
 Moved past batches to `/history`, linked from the main screen in a separate tab. The main screen shows active jobs and the current visit's latest started batch; the results section stays hidden when neither exists. The history page reuses export actions and the panel editor. Python parsing, JavaScript syntax, and diff whitespace checks passed; browser tests were not run for this change.
+
+## Summary-only single-folder export — 2026-11-08
+
+Added `all-social-summaries` as a single-folder choice. Its dedicated stylized-summary phase uses the existing summary renderer and skips individual slides, ads, captions, and print stages. The collector publishes one comic-named PNG per source and uses the existing retry, regeneration, and restart paths. Python parsing, JavaScript syntax, and diff whitespace checks passed; processing and browser tests were not run for this change.

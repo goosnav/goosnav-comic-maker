@@ -19,9 +19,11 @@ Each batch creates a new numbered run. Failed comics do not stop the others. Est
 - **Full:** per-comic folders, all collection folders, and manifests (the previous layout).
 - **Batch:** only the five collection folders: book crops, PNG/TIFF pages, original-format filtered pages, flat social images, and carousel folders.
 - **Minimal:** only `all-social-carousels` and `all-full-size-pages`.
-- **Single folder:** choose filtered pages, carousel folders, book crops, PNG/TIFF pages, or flat social images.
+- **Single folder:** choose filtered pages, carousel folders, summary slides only, book crops, PNG/TIFF pages, or flat social images.
 
 Every mode creates a new numbered run beneath the destination. The selection is remembered for the next batch. Compact modes keep manifests and working files in local app storage, so their exports contain only the selected folders. Editing and retrying use the original batch's mode. Unselected processing stages are skipped. Print enlargement does not affect the original-format filtered pages.
+
+**Single folder → Summary slides only (4:5)** creates `all-social-summaries` with one Red Sun portrait summary per comic, named after the comic. Each summary uses the existing automatic panel layout, summary grid setting, and 2160 × 2700 canvas. This option skips individual slides, ads, captions, and print exports.
 
 For posting, choose **Single folder → Social carousel folders**, then drag the child folders from `all-social-carousels` into Drive:
 
