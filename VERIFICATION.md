@@ -1,4 +1,49 @@
-# Verification — 2026-10-12
+# Verification
+
+## 2026-11-22 — complete-frame cropping (0.2.1)
+
+Executed in an isolated Linux/Python 3.12 environment, using the locked project
+dependencies. `./verify.sh` passed: **45 tests passed, 7 skipped**, followed by the
+real loopback HTTP import/export, collected-file checks, CLI success/failure,
+launcher refresh, and clean shutdown. The seven skips are the pre-existing private
+raw-TIFF fixtures, which are not checked into this repository. Two upstream test
+client deprecation warnings remain. Local HTTP verification ran without the test
+host's SOCKS proxy environment variables. No production application data was used.
+
+`tests/test_detection.py` adds **22 synthetic regression cases**. All pass with the
+new detector; the same suite against the previous commit passed 1 and failed 21.
+Cases cover strong internal lines on every side, crossing lines, speech bubbles,
+inset scene rectangles, duplicate measurements of a border, faint/broken/wavy
+frames, 2/4/6-panel layouts, artwork bridging gutters, 2–4 pixel paper gutters,
+three-sided recovery with a review warning, ±3 degree scans, and 33.66 megapixels.
+Assertions check complete frame containment and neighboring-panel exclusion, not
+only panel counts.
+
+An additional visual check used existing book images from `goosnav-center`:
+pages 001, 002, 003, 004, 006, 007, 008, 020, 036, and 095. All **10 framed pages /
+33 panels** retained the correct counts and complete frames, without review
+warnings. These private artwork files were not copied into this public repository.
+Borderless page 005 still uses a review-required gutter estimate; a detached
+caption falls outside its estimated boxes. This update does not establish complete
+automatic support for borderless vignette pages.
+
+Timing below measures `detection.analyze()` only, with one warmup followed by three
+timed calls; values are medians on this test host, not complete export times.
+
+| Synthetic scan | Previous | 0.2.1 |
+| --- | ---: | ---: |
+| 1200 × 900, crossed scene lines | 203 ms | 94 ms |
+| 1200 × 1000, four panels | 152 ms | 161 ms |
+| 6600 × 5100, crossed scene lines | 497 ms | 196 ms |
+
+The four-panel case adds about 9 ms. Correctly resolving difficult frames on the
+first pass avoids repeated normalization/detection in the other two cases.
+`uv sync --locked --group dev`, Python compilation, and `git diff --check` passed.
+No GUI controls changed; the historical interactive browser suite below was not
+rerun for this detector-only release. Existing workflow tests cover saved manual
+boundaries, preview caching, regeneration, and source-file integrity.
+
+## Earlier verification — 2026-10-12
 
 Executed on macOS against version 0.2.0. Test state and exports were isolated from the artist's application data. Originals and older exports were preserved.
 

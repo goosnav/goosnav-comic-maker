@@ -148,3 +148,23 @@ GUI and CLI share the same processing service. CLI runs create new numbered fold
 Run `./verify.sh` for processing, metadata, recovery, HTTP, CLI, and shutdown checks. Real browser interactions are implemented in `tests/browser_workflow.mjs`. See `VERIFICATION.md` for the executed checks and visual inspection record.
 
 The detector targets mostly rectangular bordered comics. Use one image per comic; split animated images and multi-page TIFFs before import. PDF and PSD inputs are not supported.
+
+### Border detection and existing exports (0.2.1)
+
+Detection now prefers the complete outside frame over table edges, walls, speech
+bubbles, and other rectangles inside the drawing. Duplicate measurements of one
+border no longer count as separate panels. A page is split only where independent
+frames have a paper gutter that also opens through the surrounding border. Thin
+gutters and slightly uneven borders are supported; crop expansion stops before a
+neighboring panel. Crop coordinates round outward when restored to full resolution.
+
+If most of one edge is missing, three aligned sides can recover the outer extent
+of an otherwise verified frame. These estimates are flagged for review. A shared
+divider without a paper gutter may remain one complete crop; use the frame editor
+to split it explicitly. The detector does not redraw or invent missing artwork.
+
+Pull the update and relaunch the app. New imports and regenerated comics use the
+updated detector; cached automatic previews are refreshed. Previously saved manual
+boundaries remain in place. For a manually corrected comic, use **Restore automatic
+detection**, then **Save & regenerate**, to adopt the new boundaries. Existing PNGs,
+TIFFs, and posted carousels change only when you regenerate/re-export them.

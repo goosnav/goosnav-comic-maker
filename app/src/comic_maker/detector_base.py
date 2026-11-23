@@ -10,6 +10,7 @@ containers and nested rectangles -> reading order -> crop margin.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from math import ceil, floor
 from pathlib import Path
 
 import cv2
@@ -222,7 +223,7 @@ def corner_candidates(corners, mask: np.ndarray) -> list[Box]:
     return found
 
 
-def contour_candidates(ink: np.ndarray, mask: np.ndarray) -> list[Box]:
+def contour_candidates(ink: np.ndarray, mask: np.ndarray, partial: list[Box] | None = None) -> list[Box]:
     """Second source: verified rectangular contours from the full hierarchy."""
     w = mask.shape[1]
     band = max(int(w * 0.006), 4)
@@ -241,25 +242,155 @@ def contour_candidates(ink: np.ndarray, mask: np.ndarray) -> list[Box]:
         box = _verified(mask, x, y, x + bw, y + bh, band, "contour")
         if box:
             found.append(box)
+        elif partial is not None and (MIN_AREA <= bw * bh / ink.size <= MAX_AREA
+                                      and MIN_ASPECT <= bw / bh <= MAX_ASPECT):
+            cov = border_coverage(mask, x, y, x + bw, y + bh, band)
+            if sum(c >= .85 for c in cov) == 3 and min(cov) < .5:
+                partial.append(Box(x, y, bw, bh, sum(cov) / 4, min(cov), "partial contour"))
     return found
 
 
-def prune(candidates: list[Box]) -> list[Box]:
-    """Drop merged containers (mostly filled by other panels), then nested/duplicate boxes."""
-    kept = []
-    for box in candidates:
-        inner = sum(o.area for o in candidates
-                    if o is not box and o.area < box.area
+def _distinct_candidates(candidates: list[Box]) -> list[Box]:
+    """One exterior measurement per frame, before reasoning about child panels.
+
+    Corner junctions and the inner/outer contours often describe the same border.
+    Counting their areas as separate children used to delete the real outer frame.
+    Keep the largest measurement so a stronger inner stroke cannot tighten a crop.
+    """
+    unique: list[Box] = []
+    for box in sorted(candidates, key=lambda b: -b.area):
+        if not any(box.intersection(other) /
+                   (box.area + other.area - box.intersection(other)) >= .90
+                   for other in unique):
+            unique.append(box)
+    return unique
+
+
+def _independent(candidates: list[Box]) -> list[Box]:
+    """Largest non-overlapping rectangles; duplicates never inflate covered area."""
+    out: list[Box] = []
+    for box in sorted(candidates, key=lambda b: -b.area):
+        if not any(box.intersection(other) > .10 * min(box.area, other.area) for other in out):
+            out.append(box)
+    return out
+
+
+def _separated_children(parent: Box, children: list[Box], ink: np.ndarray) -> bool:
+    """Only split an enclosing rectangle at a real, open paper gutter.
+
+    A table line/shared edge is not a gutter. Neither is white space between two
+    speech bubbles: a gutter must also interrupt both opposite parent borders.
+    This intentionally keeps a shared-border layout as one conservative crop
+    rather than gambling that a scene line is a panel boundary.
+    """
+    height, width = ink.shape
+    band = max(3, round(width * .006))
+    for vertical in (True, False):
+        start = (lambda b: b.x) if vertical else (lambda b: b.y)
+        end = (lambda b: b.x + b.w) if vertical else (lambda b: b.y + b.h)
+        gaps = {(end(a), start(b)) for a in children for b in children
+                if a is not b and start(a) < start(b) and end(a) < end(b)
+                and start(b) - end(a) >= -2 * band
+                and start(parent) < end(a) < end(parent)
+                and start(parent) < start(b) < end(parent)}
+        cuts: set[int] = set()
+        for near_left, near_right in sorted(gaps):
+            # Corner centroids can overshoot a narrow gutter. Search for the
+            # actual paper near those edges, including nominally overlapping
+            # boxes. All three tests must pass along the SAME row/column.
+            lo = max(start(parent) + band, min(near_left, near_right) - 2 * band)
+            hi = min(end(parent) - band, max(near_left, near_right) + 2 * band + 1)
+            if hi <= lo:
+                continue
+            if vertical:
+                strip = ink[max(0, parent.y):min(height, parent.y + parent.h), lo:hi]
+                first = ink[max(0, parent.y - band):min(height, parent.y + band + 1), lo:hi]
+                last = ink[max(0, parent.y + parent.h - band):min(height, parent.y + parent.h + band + 1), lo:hi]
+            else:
+                strip = ink[lo:hi, max(0, parent.x):min(width, parent.x + parent.w)]
+                first = ink[lo:hi, max(0, parent.x - band):min(width, parent.x + band + 1)]
+                last = ink[lo:hi, max(0, parent.x + parent.w - band):min(width, parent.x + parent.w + band + 1)]
+            if any(not part.size for part in (strip, first, last)):
+                continue
+            axis = 0 if vertical else 1
+            paper = ((np.count_nonzero(strip, axis=axis) / strip.shape[axis] <= .04) &
+                     (np.count_nonzero(first, axis=axis) / first.shape[axis] <= .08) &
+                     (np.count_nonzero(last, axis=axis) / last.shape[axis] <= .08))
+            transitions = np.diff(np.pad(paper.astype(np.int8), (1, 1)))
+            for run_start, run_end in zip(np.flatnonzero(transitions == 1), np.flatnonzero(transitions == -1)):
+                cuts.add(lo + (int(run_start) + int(run_end) - 1) // 2)
+        for cut in sorted(cuts):
+            left = [b for b in children if end(b) <= cut + 2 * band and start(b) < cut - 2 * band]
+            right = [b for b in children if start(b) >= cut - 2 * band and end(b) > cut + 2 * band]
+            if not left or not right:
+                continue
+            # A spurious rectangle can start at a scene line in the preceding
+            # panel and cross a real gutter. Its supporting panel extends outside
+            # the spurious rectangle; count only the part actually inside it.
+            clipped = []
+            for child in left + right:
+                x0, y0 = max(parent.x, child.x), max(parent.y, child.y)
+                x1 = min(parent.x + parent.w, child.x + child.w)
+                y1 = min(parent.y + parent.h, child.y + child.h)
+                if x1 > x0 and y1 > y0:
+                    clipped.append(Box(x0, y0, x1 - x0, y1 - y0))
+            separate = _independent(clipped)
+            if len(separate) < 2 or sum(b.area for b in separate) < .50 * parent.area:
+                continue
+            # Inset artwork must not be allowed to discard any outer strip.
+            if (min(b.x for b in separate) <= parent.x + 2 * band and
+                    min(b.y for b in separate) <= parent.y + 2 * band and
+                    max(b.x + b.w for b in separate) >= parent.x + parent.w - 2 * band and
+                    max(b.y + b.h for b in separate) >= parent.y + parent.h - 2 * band):
+                return True
+    return False
+
+
+def prune(candidates: list[Box], ink: np.ndarray | None = None) -> list[Box]:
+    """Prefer complete outer frames unless independent panels have real gutters."""
+    unique = _distinct_candidates(candidates)
+    kept: list[Box] = []
+    for box in unique:
+        children = [o for o in unique if o is not box
                     and o.min_coverage >= CONTAINER_CHILD_MIN_COVERAGE
-                    and box.intersection(o) >= 0.8 * o.area)
-        if inner < 0.5 * box.area:
-            kept.append(box)
-    kept.sort(key=lambda b: -b.area)
+                    and .08 * box.area <= box.intersection(o) < .95 * box.area]
+        if ink is not None and len(children) >= 2 and _separated_children(box, children, ink):
+            continue
+        kept.append(box)
     final: list[Box] = []
-    for box in kept:
-        if not any(box.intersection(k) >= 0.8 * box.area for k in final):
+    for box in kept:  # already largest first
+        if not any(box.intersection(other) >= .80 * box.area for other in final):
             final.append(box)
     return final
+
+
+def recover_partial_frames(boxes: list[Box], partial: list[Box], mask: np.ndarray) -> list[Box]:
+    """Recover one damaged outer edge without trusting arbitrary open artwork.
+
+    The other three sides must coincide with an already verified frame. A
+    recovered box retains its weak-edge score and therefore requires review.
+    """
+    out = list(boxes)
+    band = max(4, round(mask.shape[1] * .006))
+    for candidate in sorted(partial, key=lambda b: -b.area):
+        cov = border_coverage(mask, candidate.x, candidate.y,
+                              candidate.x + candidate.w, candidate.y + candidate.h, band)
+        outer_edges = [candidate.y, candidate.x + candidate.w,
+                       candidate.y + candidate.h, candidate.x]
+        for i, box in enumerate(out):
+            if not 1.05 * box.area <= candidate.area <= 2.5 * box.area:
+                continue
+            if candidate.intersection(box) < .98 * box.area:
+                continue
+            edges = [box.y, box.x + box.w, box.y + box.h, box.x]
+            if any(abs(a - b) > 2 * band for a, b, strength in zip(edges, outer_edges, cov) if strength >= .85):
+                continue
+            if any(j != i and candidate.intersection(other) > .05 * min(candidate.area, other.area)
+                   for j, other in enumerate(out)):
+                continue
+            out[i] = candidate
+            break
+    return out
 
 
 # ---------------------------------------------------------------- ordering
@@ -301,7 +432,27 @@ def _edge_line(ink: np.ndarray, box: Box, side: str, offset: int, samples: int =
     return float(ink[ys, x].mean())
 
 
-def snap_outward(gray: np.ndarray, box: Box) -> Box:
+def _growth_limits(box: Box, boxes: list[Box], want: int) -> dict[str, int]:
+    """Divide the available gutter between neighbors, before either crop grows."""
+    side = dict(left=want, right=want, top=want, bottom=want)
+    for other in boxes:
+        if other is box:
+            continue
+        if min(box.y + box.h, other.y + other.h) > max(box.y, other.y):
+            if other.x < box.x and other.x + other.w < box.x + box.w:
+                side["left"] = min(side["left"], max(0, (box.x - other.x - other.w) // 2))
+            elif other.x > box.x and other.x + other.w > box.x + box.w:
+                side["right"] = min(side["right"], max(0, (other.x - box.x - box.w) // 2))
+        if min(box.x + box.w, other.x + other.w) > max(box.x, other.x):
+            if other.y < box.y and other.y + other.h < box.y + box.h:
+                side["top"] = min(side["top"], max(0, (box.y - other.y - other.h) // 2))
+            elif other.y > box.y and other.y + other.h > box.y + box.h:
+                side["bottom"] = min(side["bottom"], max(0, (other.y - box.y - box.h) // 2))
+    return side
+
+
+def snap_outward(gray: np.ndarray, box: Box, ink: np.ndarray | None = None,
+                 neighbors: list[Box] | None = None) -> Box:
     """Grow each edge until the drawn border really ends.
 
     A rectangle assembled from corner junctions sits in the middle of the ink, and a
@@ -309,12 +460,14 @@ def snap_outward(gray: np.ndarray, box: Box) -> Box:
     Walk outward while a good share of the edge is still ink, tolerating small gaps, and
     stop at the paper. Never shrinks the box.
     """
-    ink = gray < 160
+    if ink is None:
+        ink = gray < 160
     reach = max(int(min(box.w, box.h) * BORDER_REACH_FRACTION), 6)
+    limits = _growth_limits(box, neighbors or [], reach)
     grown = {}
     for side in ("top", "right", "bottom", "left"):
         best, gap = 0, 0
-        for offset in range(1, reach + 1):
+        for offset in range(1, limits[side] + 1):
             if _edge_line(ink, box, side, offset) >= BORDER_INK_SHARE:
                 best, gap = offset, 0
             else:
@@ -332,20 +485,7 @@ def add_bleed(boxes: list[Box], width: int, height: int) -> list[Box]:
     out = []
     for box in boxes:
         want = int(max(box.w, box.h) * CANVAS_MARGIN_FRACTION)
-        side = dict(left=want, right=want, top=want, bottom=want)
-        for other in boxes:
-            if other is box:
-                continue
-            if min(box.y + box.h, other.y + other.h) > max(box.y, other.y):  # same row
-                if other.x + other.w <= box.x:
-                    side["left"] = min(side["left"], (box.x - other.x - other.w) // 2)
-                elif other.x >= box.x + box.w:
-                    side["right"] = min(side["right"], (other.x - box.x - box.w) // 2)
-            if min(box.x + box.w, other.x + other.w) > max(box.x, other.x):  # same column
-                if other.y + other.h <= box.y:
-                    side["top"] = min(side["top"], (box.y - other.y - other.h) // 2)
-                elif other.y >= box.y + box.h:
-                    side["bottom"] = min(side["bottom"], (other.y - box.y - box.h) // 2)
+        side = _growth_limits(box, boxes, want)
         x0 = max(0, box.x - max(0, side["left"]))
         y0 = max(0, box.y - max(0, side["top"]))
         x1 = min(width, box.x + box.w + max(0, side["right"]))
@@ -408,13 +548,19 @@ def detect(detection_image: np.ndarray, render_image: np.ndarray | None = None) 
     horizontal, vertical = line_masks(ink)
     mask = cv2.bitwise_or(horizontal, vertical)
     candidates = corner_candidates(find_corners(horizontal, vertical), mask)
-    candidates += contour_candidates(ink, mask)
+    partial: list[Box] = []
+    candidates += contour_candidates(ink, mask, partial)
     height, width = detection_image.shape[:2]
-    snapped = []
-    for box in prune(candidates):
-        full = Box(int(box.x / scale), int(box.y / scale), int(box.w / scale), int(box.h / scale),
+    full_boxes = []
+    full_ink = detection_image < 160
+    selected = recover_partial_frames(prune(candidates, ink), partial, mask)
+    for box in selected:
+        x0, y0 = floor(box.x / scale), floor(box.y / scale)
+        x1, y1 = ceil((box.x + box.w) / scale), ceil((box.y + box.h) / scale)
+        full_boxes.append(Box(x0, y0, x1 - x0, y1 - y0,
                    box.coverage, box.min_coverage, box.source)
-        snapped.append(snap_outward(detection_image, full))
+        )
+    snapped = [snap_outward(detection_image, full, full_ink, full_boxes) for full in full_boxes]
     boxes = reading_order(add_bleed(snapped, width, height))
     reasons = assess(boxes, width, height)
     return Detection(boxes=boxes, angle=angle, render_image=render_image,

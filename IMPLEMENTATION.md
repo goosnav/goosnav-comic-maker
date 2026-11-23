@@ -1,8 +1,21 @@
-# Implementation contract — version 0.2.0
+# Implementation contract — version 0.2.1
 
 ## Processing
 
 `imaging.py` loads originals, preserves DPI, and performs full-resolution ink cleanup. `detection.py` retains the existing bordered-panel detector, local recovery, and reading order. `layout_base.py` selects and places summary panels. `red_sun.py` contains the adapted black-and-white grid reduction; siblings are not imported at runtime.
+
+The border detector deduplicates corner/contour measurements before selection and
+retains enclosing frames unless independent candidates are separated by a verified
+paper corridor, including at both ends of the outer border. Candidate intersections
+provide evidence for rejecting rectangles that straddle a real gutter. Narrow-gutter
+checks tolerate small corner-coordinate errors. A contour with three strong aligned
+sides can recover a damaged fourth edge of an accepted rectangle; the actual weak
+coverage is retained for review warnings. Native-resolution conversion uses floor
+for starts and ceiling for ends. Border expansion and bleed share neighbor limits.
+The full-resolution ink mask is allocated once per detection, not once per panel.
+
+Version 0.2.1 invalidates automatic preview/export recipes. Deskew coordinates and
+the correction coordinate version are unchanged, so saved manual crops remain valid.
 
 `pipeline.py` is the shared GUI/CLI service. Schema 2 records independent recipes and file hashes for full-page print, print crop, regular carousel, and stylized carousel. Print enlargement is binary nearest-neighbor, with proportional DPI. Social canvases are 2160 × 2700. Regular fitting uses Lanczos; stylized fitting uses nearest-neighbor. Both summary and individual stylized artwork start from cleaned native crops.
 

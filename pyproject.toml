@@ -1,6 +1,6 @@
 [project]
 name = "goosnav-comic-maker"
-version = "0.2.0"
+version = "0.2.1"
 description = "A local comic production desk: pencil scans to crisp carousel exports."
 requires-python = ">=3.12,<3.14"
 dependencies = ["pillow>=11,<13", "numpy>=2,<3", "opencv-python-headless>=4.12,<5", "fastapi>=0.115,<1", "uvicorn>=0.30,<1"]
