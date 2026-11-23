@@ -5,7 +5,7 @@ const state = {settings:{}, sources:[], selected:new Set(), paths:[], jobs:[], l
 const historyPage=document.body.dataset.page==='history';
 if(historyPage){document.title='Export history · Goosnav Comic Maker';document.querySelector('.import').hidden=true;$('history-title').hidden=false;$('export-heading').hidden=true;const link=$('history-link');link.textContent='Back to comics';link.href='/';link.removeAttribute('target');}
 const esc = value => String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-async function api(path,body){const response=await fetch(path,{method:body===undefined?'GET':'POST',headers:body===undefined?{}:{'Content-Type':'application/json','X-Session':token},body:body===undefined?undefined:JSON.stringify(body)});let value;try{value=await response.json();}catch{throw Error('The app returned an unreadable response.');}if(!response.ok)throw Error(value.error||value.detail||'Request failed');return value;}
+async function api(path,body,options={}){const response=await fetch(path,{...options,method:body===undefined?'GET':'POST',headers:body===undefined?{}:{'Content-Type':'application/json','X-Session':token},body:body===undefined?undefined:JSON.stringify(body)});let value;try{value=await response.json();}catch{throw Error('The app returned an unreadable response.');}if(!response.ok)throw Error(value.error||value.detail||'Request failed');return value;}
 function notice(message){$('notice').textContent=message;$('notice').hidden=!message;}
 function act(fn){return async event=>{try{await fn(event);}catch(error){notice(error.message);}};}
 function settings(){return {...state.settings,recursive:$('recursive').checked,lines_file:$('lines').value.trim(),ad_enabled:$('ad-on').checked,ad_folder:$('ad-folder').value.trim(),export_mode:$('export-mode').value,single_output:$('single-output').value};}
@@ -23,8 +23,8 @@ $('choose-ad').onclick=act(async()=>{const value=await api('/api/dialog',{kind:'
 for(const id of ['lines','ad-folder','ad-on'])$(id).onchange=saveExtras;
 $('output').oninput=()=>{state.outputManual=true;};
 function artifact(job,item,name){return `/api/artifact/${job.id}/${item.id}/${name.split('/').map(encodeURIComponent).join('/')}?v=${item.result?.files?.[name]||''}`;}
-function renderJobs(){const active=state.jobs.filter(job=>['running','queued'].includes(job.status));if(!state.currentJobId&&active.length)state.currentJobId=active[0].id;const jobs=historyPage?state.jobs:state.jobs.filter(job=>job.id===state.currentJobId||['running','queued'].includes(job.status));const hash=JSON.stringify(jobs);if(hash===state.lastJobs)return;state.lastJobs=hash;$('export-results').hidden=!historyPage&&!jobs.length;$('jobs').innerHTML=jobs.length?jobs.map(job=>{const running=['running','queued'].includes(job.status),done=job.items.filter(i=>!['running','queued'].includes(i.status)).length;return `<article class="batch"><div class="batch-title"><strong>${new Date(job.created*1000).toLocaleString([],{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</strong><small>${done} / ${job.items.length} · ${esc(job.status)}</small><div class="actions"><button data-open="${job.id}">Open exports</button>${job.social_output?`<button data-social="${job.id}">Open all social</button>`:''}${job.carousel_output?`<button data-carousels="${job.id}">Open all social carousels</button>`:''}${job.carousel_output&&!running?`<button data-drive="${job.id}">Upload to Drive</button>`:''}${job.summary_output?`<button data-summaries="${job.id}">Open summary slides</button>`:''}${job.book_print_output?`<button data-book-prints="${job.id}">Open book prints</button>`:''}${job.processed_page_output?`<button data-processed-pages="${job.id}">Open processed pages</button>`:''}${job.full_size_page_output?`<button data-full-size-pages="${job.id}">Open full-size pages</button>`:''}${running?`<button data-stop="${job.id}">${job.cancel_requested?'Stopping…':'Stop'}</button>`:job.schema_version===2&&['partial','cancelled'].includes(job.status)?`<button data-retry="${job.id}">Retry unfinished</button>`:''}</div></div>${job.drive_upload?`<p class="hint${job.drive_upload.status==='failed'?' error':''}">${esc(job.drive_upload.message)}</p>`:''}<progress value="${done}" max="${job.items.length}" aria-label="Batch progress"></progress>${job.items.map(item=>{const r=item.result;const summary=r?(r.summary_file&&r.files?.[r.summary_file]?r.summary_file:null)||Object.keys(r.files||{}).find(n=>n.startsWith('regular-carousel/')&&n.endsWith('-summary.png'))||Object.keys(r.files||{}).find(n=>n==='bw/summary.png'):null;return `<div class="result-row">${summary?`<img src="${artifact(job,item,summary)}" alt="${esc(item.name)} summary" loading="lazy">`:'<div style="width:64px"></div>'}<div class="result-copy"><h3>${esc(item.name)}</h3><p>${r?.needs_review||r?.warnings?.length?'<span class="review-flag">Needs review</span>':''}${esc(item.stage)}${r?' · '+r.panel_count+' panel'+(r.panel_count===1?'':'s'):''}</p>${item.error?`<p class="error">${esc(item.error)}</p>`:''}${r?.stages?`<div class="phase-status">${[['Print','full-page'],['Crop','comic-crop'],['Regular','regular-carousel'],['Stylized','stylized-carousel'],['Summary','stylized-summary']].filter(([,key])=>key in r.stages).map(([label,key])=>`<span>${label} ${r.stages[key]?.status==='complete'?'✓':'…'}</span>`).join('')}</div>`:''}</div><div class="actions"><button data-job-edit="${job.id}" data-source="${item.id}">Edit panels</button>${r?`<button data-comic-open="${job.id}" data-source="${item.id}">Open comic</button>`:''}</div></div>`;}).join('')}</article>`;}).join(''):'<p class="empty">No exports yet.</p>';}
-async function poll(){try{state.jobs=await api('/api/jobs');renderJobs();updateDriveDialog();}catch{/* Keep existing results while the server reconnects. */}}
+function renderJobs(){const active=state.jobs.filter(job=>['running','queued'].includes(job.status));if(!state.currentJobId&&active.length)state.currentJobId=active[0].id;const jobs=historyPage?state.jobs:state.jobs.filter(job=>job.id===state.currentJobId||['running','queued'].includes(job.status));const hash=JSON.stringify(jobs);if(hash===state.lastJobs)return;state.lastJobs=hash;$('export-results').hidden=!historyPage&&!jobs.length;$('jobs').innerHTML=jobs.length?jobs.map(job=>{const running=['running','queued'].includes(job.status),done=job.items.filter(i=>!['running','queued'].includes(i.status)).length;return `<article class="batch"><div class="batch-title"><strong>${new Date(job.created*1000).toLocaleString([],{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</strong><small>${done} / ${job.items.length} · ${esc(job.status)}</small><div class="actions"><button data-open="${job.id}">Open exports</button>${job.social_output?`<button data-social="${job.id}">Open all social</button>`:''}${job.carousel_output?`<button data-carousels="${job.id}">Open all social carousels</button>`:''}${job.carousel_output&&!running?`<button data-drive="${job.id}">Upload to Drive</button>`:''}${job.summary_output?`<button data-summaries="${job.id}">Open summary slides</button>`:''}${job.book_print_output?`<button data-book-prints="${job.id}">Open book prints</button>`:''}${job.processed_page_output?`<button data-processed-pages="${job.id}">Open processed pages</button>`:''}${job.full_size_page_output?`<button data-full-size-pages="${job.id}">Open full-size pages</button>`:''}${running?`<button data-stop="${job.id}">${job.cancel_requested?'Stopping…':'Stop'}</button>`:job.schema_version===2&&['partial','cancelled'].includes(job.status)?`<button data-retry="${job.id}">Retry unfinished</button>`:''}</div></div>${job.drive_upload?`<p class="hint${job.drive_upload.status==='failed'?' error':''}">${esc(job.drive_upload.message)}${job.drive_upload.has_log?` · <a href="/api/jobs/${job.id}/drive-log" target="_blank" rel="noopener">View upload log</a>`:''}</p>`:''}<progress value="${done}" max="${job.items.length}" aria-label="Batch progress"></progress>${job.items.map(item=>{const r=item.result;const summary=r?(r.summary_file&&r.files?.[r.summary_file]?r.summary_file:null)||Object.keys(r.files||{}).find(n=>n.startsWith('regular-carousel/')&&n.endsWith('-summary.png'))||Object.keys(r.files||{}).find(n=>n==='bw/summary.png'):null;return `<div class="result-row">${summary?`<img src="${artifact(job,item,summary)}" alt="${esc(item.name)} summary" loading="lazy">`:'<div style="width:64px"></div>'}<div class="result-copy"><h3>${esc(item.name)}</h3><p>${r?.needs_review||r?.warnings?.length?'<span class="review-flag">Needs review</span>':''}${esc(item.stage)}${r?' · '+r.panel_count+' panel'+(r.panel_count===1?'':'s'):''}</p>${item.error?`<p class="error">${esc(item.error)}</p>`:''}${r?.stages?`<div class="phase-status">${[['Print','full-page'],['Crop','comic-crop'],['Regular','regular-carousel'],['Stylized','stylized-carousel'],['Summary','stylized-summary']].filter(([,key])=>key in r.stages).map(([label,key])=>`<span>${label} ${r.stages[key]?.status==='complete'?'✓':'…'}</span>`).join('')}</div>`:''}</div><div class="actions"><button data-job-edit="${job.id}" data-source="${item.id}">Edit panels</button>${r?`<button data-comic-open="${job.id}" data-source="${item.id}">Open comic</button>`:''}</div></div>`;}).join('')}</article>`;}).join(''):'<p class="empty">No exports yet.</p>';}
+async function poll(){try{state.jobs=await api('/api/jobs');renderJobs();updateDriveControls();}catch{/* Keep existing results while the server reconnects. */}}
 const editor=new PanelEditor({api,notice,onJob:async job=>{state.currentJobId=job.id;state.jobs=state.jobs.filter(j=>j.id!==job.id);state.jobs.unshift(job);renderJobs();await poll();},destination:()=>$('output').value});
 $('add-folder').onclick=act(()=>choose('folder'));$('add-files').onclick=act(()=>choose('files'));$('choose-output').onclick=act(()=>choose('output'));$('scan').onclick=act(scan);
 $('recursive').onchange=act(async()=>{if(state.paths.length)await scan();});
@@ -32,48 +32,56 @@ $('select-all').onclick=()=>{state.selected=new Set(state.sources.map(s=>s.id));
 $('clear-sources').onclick=act(async()=>{$('paths').value='';await scan();});
 $('sources').addEventListener('change',event=>{const id=event.target.dataset.select;if(id){event.target.checked?state.selected.add(id):state.selected.delete(id);controls();}});
 $('sources').addEventListener('click',act(async event=>{const b=event.target.closest('[data-edit]');if(b)await editor.open(state.sources.find(s=>s.id===b.dataset.edit),settings());}));
-$('jobs').addEventListener('click',act(async event=>{const b=event.target.closest('button');if(!b)return;if(b.dataset.drive){await openDriveDialog(b.dataset.drive);return;}if(b.dataset.open)await api('/api/open-output',{job:b.dataset.open});if(b.dataset.social)await api('/api/open-output',{job:b.dataset.social,social:true});if(b.dataset.carousels)await api('/api/open-output',{job:b.dataset.carousels,collection:'social-carousels'});if(b.dataset.summaries)await api('/api/open-output',{job:b.dataset.summaries,collection:'summaries'});if(b.dataset.bookPrints)await api('/api/open-output',{job:b.dataset.bookPrints,collection:'book-prints'});if(b.dataset.processedPages)await api('/api/open-output',{job:b.dataset.processedPages,collection:'processed-pages'});if(b.dataset.fullSizePages)await api('/api/open-output',{job:b.dataset.fullSizePages,collection:'full-size-pages'});if(b.dataset.comicOpen)await api('/api/open-output',{job:b.dataset.comicOpen,source:b.dataset.source});if(b.dataset.stop)await api(`/api/jobs/${b.dataset.stop}/cancel`,{});if(b.dataset.retry)await api(`/api/jobs/${b.dataset.retry}/resume`,{});if(b.dataset.jobEdit){const job=state.jobs.find(j=>j.id===b.dataset.jobEdit),item=job.items.find(i=>i.id===b.dataset.source);await editor.open({id:item.id,name:item.name,path:item.source},{...job.settings,canvas_width:2160,layout:item.layout||job.settings.layout},job,item);}await poll();}));
-let driveJobId, driveConnection, driveRequest=false, driveMessage='';
-function updateDriveDialog(){
-  if(!$('drive-dialog').open)return;
-  const upload=state.jobs.find(job=>job.id===driveJobId)?.drive_upload;
-  const uploading=['queued','running'].includes(upload?.status);
-  $('drive-link').disabled=driveRequest||uploading;
-  $('drive-upload').disabled=driveRequest||uploading||!driveConnection?.connected;
+$('jobs').addEventListener('click',act(async event=>{const b=event.target.closest('button');if(!b)return;if(b.dataset.drive){await uploadToDrive(b.dataset.drive);return;}if(b.dataset.open)await api('/api/open-output',{job:b.dataset.open});if(b.dataset.social)await api('/api/open-output',{job:b.dataset.social,social:true});if(b.dataset.carousels)await api('/api/open-output',{job:b.dataset.carousels,collection:'social-carousels'});if(b.dataset.summaries)await api('/api/open-output',{job:b.dataset.summaries,collection:'summaries'});if(b.dataset.bookPrints)await api('/api/open-output',{job:b.dataset.bookPrints,collection:'book-prints'});if(b.dataset.processedPages)await api('/api/open-output',{job:b.dataset.processedPages,collection:'processed-pages'});if(b.dataset.fullSizePages)await api('/api/open-output',{job:b.dataset.fullSizePages,collection:'full-size-pages'});if(b.dataset.comicOpen)await api('/api/open-output',{job:b.dataset.comicOpen,source:b.dataset.source});if(b.dataset.stop)await api(`/api/jobs/${b.dataset.stop}/cancel`,{});if(b.dataset.retry)await api(`/api/jobs/${b.dataset.retry}/resume`,{});if(b.dataset.jobEdit){const job=state.jobs.find(j=>j.id===b.dataset.jobEdit),item=job.items.find(i=>i.id===b.dataset.source);await editor.open({id:item.id,name:item.name,path:item.source},{...job.settings,canvas_width:2160,layout:item.layout||job.settings.layout},job,item);}await poll();}));
+let driveConnection, driveRequest=false, savedDriveLink='';
+function updateDriveControls(){
+  const uploading=state.jobs.some(job=>['queued','running'].includes(job.drive_upload?.status));
   $('drive-connect').disabled=driveRequest||uploading;
   $('drive-connect').textContent=driveConnection?.connected?'Reconnect Google Drive':'Connect Google Drive';
-  $('drive-status').textContent=driveMessage||upload?.message||(driveConnection?.connected?'Ready to upload.':'Connect your Google account first.');
 }
-async function openDriveDialog(id){
-  driveJobId=id;
-  driveMessage='';
-  driveConnection=await api('/api/drive');
-  $('drive-dialog').showModal();
-  updateDriveDialog();
+function showDriveStatus(message){
+  $('drive-status').textContent=message;
+  $('drive-status').hidden=!message;
 }
-$('drive-close').onclick=()=>$('drive-dialog').close();
+async function saveDriveLink(){
+  const link=$('drive-link').value.trim();
+  if(link===savedDriveLink)return;
+  await api('/api/drive/destination',{link},{keepalive:true});
+  savedDriveLink=link;
+}
+$('drive-link').addEventListener('change',async()=>{
+  try{await saveDriveLink();showDriveStatus('');}
+  catch(error){showDriveStatus(error.message);}
+});
+window.addEventListener('pagehide',()=>{saveDriveLink().catch(()=>{});});
 $('drive-connect').onclick=async()=>{
   driveRequest=true;
-  driveMessage='Finish signing in with Google in your browser.';
-  updateDriveDialog();
-  try{driveConnection=await api('/api/drive/connect',{});driveMessage='Google Drive connected.';}
-  catch(error){driveMessage=error.message;}
-  finally{driveRequest=false;updateDriveDialog();}
+  showDriveStatus('Finish signing in with Google in your browser.');
+  updateDriveControls();
+  try{driveConnection=await api('/api/drive/connect',{});showDriveStatus('Google Drive connected.');}
+  catch(error){showDriveStatus(error.message);}
+  finally{driveRequest=false;updateDriveControls();}
 };
-$('drive-form').onsubmit=async event=>{
-  event.preventDefault();
+async function uploadToDrive(id){
+  if(driveRequest)return;
+  const link=$('drive-link').value.trim();
+  if(!link||!$('drive-link').checkValidity()){
+    $('drive-link').focus();
+    showDriveStatus('Paste the Drive folder link here first.');
+    return;
+  }
   driveRequest=true;
-  driveMessage='Starting upload…';
-  updateDriveDialog();
+  updateDriveControls();
   try{
-    const upload=await api(`/api/jobs/${driveJobId}/upload-drive`,{link:$('drive-link').value});
-    const job=state.jobs.find(job=>job.id===driveJobId);
+    const upload=await api(`/api/jobs/${id}/upload-drive`,{link});
+    savedDriveLink=link;
+    const job=state.jobs.find(job=>job.id===id);
     if(job)job.drive_upload=upload;
-    driveMessage='';
+    showDriveStatus('');
     renderJobs();
-  }catch(error){driveMessage=error.message;}
-  finally{driveRequest=false;updateDriveDialog();}
-};
+  }catch(error){showDriveStatus(error.message);}
+  finally{driveRequest=false;updateDriveControls();}
+}
 $('process').onclick=act(async()=>{const button=$('process');button.disabled=true;try{const job=await api('/api/jobs',{ids:[...state.selected],output:$('output').value,manual:state.outputManual,settings:settings()});state.currentJobId=job.id;state.jobs.unshift(job);renderJobs();notice('');}finally{controls();}});
 $('settings-open').onclick=()=>{$('settings-dialog').showModal();};
 document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>$(b.dataset.close).close());
@@ -81,4 +89,4 @@ for(const id of ['ink-strength','cleanup'])$(id).oninput=updateValues;
 $('settings-form').onsubmit=act(async event=>{event.preventDefault();const values={...settings(),ink_strength:Number($('ink-strength').value),cleanup:Number($('cleanup').value),master_scale:Number($('master-scale').value),canvas_width:2160,panel_grid_width:$('panel-grid').value===''?null:Number($('panel-grid').value),summary_grid_width:$('summary-grid').value===''?null:Number($('summary-grid').value),pattern:$('pattern').value||'*'};fill(await api('/api/settings',values));$('settings-dialog').close();if(state.paths.length)await scan();});
 let pollTimer;
 $('quit').onclick=act(async()=>{await api('/api/quit',{});clearInterval(pollTimer);notice('The app has stopped. Reopen the launcher to return.');});
-(async()=>{try{const value=await api('/api/state');fill(value.settings);state.outputManual=!!value.session.output_manual;$('output').value=(state.outputManual&&value.session.output)||value.default_output;state.paths=value.session.paths||[];$('paths').value=state.paths.join('\n');state.sources=value.session.sources||[];state.selected=new Set(state.sources.map(s=>s.id));state.jobs=value.jobs;renderSources();renderJobs();pollTimer=setInterval(poll,1800);}catch(error){notice(error.message);}})();
+(async()=>{try{const value=await api('/api/state');fill(value.settings);state.outputManual=!!value.session.output_manual;$('output').value=(state.outputManual&&value.session.output)||value.default_output;state.paths=value.session.paths||[];$('paths').value=state.paths.join('\n');state.sources=value.session.sources||[];state.selected=new Set(state.sources.map(s=>s.id));state.jobs=value.jobs;renderSources();renderJobs();api('/api/drive').then(value=>{driveConnection=value;savedDriveLink=value.link;if(!$('drive-link').value)$('drive-link').value=value.link;updateDriveControls();}).catch(error=>showDriveStatus(error.message));pollTimer=setInterval(poll,1800);}catch(error){notice(error.message);}})();

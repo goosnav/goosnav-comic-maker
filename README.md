@@ -41,11 +41,11 @@ The caption filename is the exact name of its containing carousel folder plus `.
 
 ## Upload carousels to Google Drive
 
-Install [rclone](https://rclone.org/install/) for Drive uploads. On macOS with Homebrew, use `brew install rclone`. After a batch that includes `all-social-carousels` finishes, click **Upload to Drive** on that batch. Connect your Google account once, paste the folder link used by your Repurpose workflow, then click **Upload carousels**. The account needs permission to add files to that folder.
+Install [rclone](https://rclone.org/install/) for Drive uploads. On macOS with Homebrew, use `brew install rclone`. Paste your Repurpose folder link into **Google Drive folder link** beside the ad settings and connect your Google account once. The link is saved on this computer. After a batch that includes `all-social-carousels` finishes, click **Upload to Drive** on that batch. The account needs permission to add files to that folder.
 
 Each carousel becomes a direct subfolder of the linked folder. The app sends its matching caption first, if present, then uploads `image-1.png`, `image-2.png`, and the remaining images in order. It waits for each transfer to finish and checks the order by Drive creation time. The upload includes only the completed social carousel folders and their files.
 
-If an upload stops, use the same link again to continue. The app checks existing files and continues after slides already present in the correct order. Use a different destination if matching carousel folders contain different or out-of-order files.
+The app retries temporary Drive errors. If an upload stops, use the same link again to continue. The app checks existing files and continues after slides already present in the correct order. Use a different destination if matching carousel folders contain different or out-of-order files. **View upload log** opens the batch log, which is stored in `drive-uploads/` under local app data.
 
 ## Print and social quality
 

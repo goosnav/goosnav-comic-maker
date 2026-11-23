@@ -2,4 +2,4 @@
 
 header nav a{align-self:center;font-size:13px;color:var(--muted);text-underline-offset:3px}body[data-page=history] .batches{margin-top:0}
 
-#drive-dialog{max-width:min(540px,94vw)}#drive-link{display:block;width:100%;margin-top:6px}#drive-dialog .dialog-footer{gap:8px;flex-wrap:wrap}
+#drive-status{flex-basis:100%;margin:0}

@@ -10,12 +10,19 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from . import pipeline
 from .settings import atomic_bytes
+
+
+class TransferError(ValueError):
+    def __init__(self, message, *, retryable=False):
+        super().__init__(message)
+        self.retryable = retryable
 
 
 def folder_link(value):
@@ -82,7 +89,7 @@ class Drive:
     def status(self):
         return {'connected': self.config.is_file(), 'busy': self.lock.locked()}
 
-    def run(self, *args, config=None, timeout=120):
+    def run(self, *args, config=None, timeout=120, log=lambda message: None):
         # This profile belongs to Comic Maker. Do not accept settings from other rclone remotes.
         env = {key: value for key, value in os.environ.items() if not key.startswith('RCLONE_')}
         try:
@@ -90,15 +97,28 @@ class Drive:
                                      '--retries', '1', '--low-level-retries', '1', *args],
                                     stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env, timeout=timeout)
         except subprocess.TimeoutExpired:
-            raise ValueError('Drive timed out. Try again to continue.') from None
+            log(f'{args[0]} timed out after {timeout} seconds.')
+            raise TransferError('Drive timed out. Use the same folder link to continue.', retryable=True) from None
         if result.returncode:
             # rclone setup output can contain credentials. Keep it out of the GUI and logs.
             if args[0] == 'config':
                 raise ValueError('Google Drive sign-in did not finish. Try connecting again.')
+            detail = result.stderr.strip()
+            for flag in ('--drive-resource-key', '--drive-root-folder-id'):
+                if flag in args:
+                    detail = detail.replace(args[args.index(flag) + 1], '[redacted]')
+            detail = re.sub(r'(?i)(Bearer\s+|[?&](?:access_token|resourcekey|upload_id)=)[^\s&"\']+', r'\1[redacted]', detail)
+            log(f'{args[0]} exited with status {result.returncode}\n{detail[-8000:]}')
             detail = result.stderr.lower()
-            if 'invalid_grant' in detail or '401' in detail:
+            codes = set(re.findall(r'(?:error |status(?: code)?[ =:]+)([45]\d\d)\b', detail))
+            if (codes & {'429', '500', '502', '503', '504'} or re.search(
+                r'ratelimitexceeded|rate limit|backenderror|connection reset|connection refused|\beof\b|'
+                r'i/o timeout|tls handshake timeout|temporary failure|deadline exceeded', detail
+            )):
+                raise TransferError('Temporary Drive error. Use the same folder link to continue.', retryable=True)
+            if 'invalid_grant' in detail or '401' in codes:
                 raise ValueError('Google Drive sign-in expired. Connect Google Drive again.')
-            if 'permission' in detail or '403' in detail or '404' in detail or 'directory not found' in detail:
+            if 'permission' in detail or codes & {'403', '404'} or 'directory not found' in detail:
                 raise ValueError('Drive could not access the destination. Check the folder link and edit access.')
             raise ValueError(f'Drive could not finish {args[0]}. Try again to continue.')
         return result.stdout
@@ -119,15 +139,27 @@ class Drive:
         finally:
             self.lock.release()
 
-    def upload(self, destination, carousels, progress):
+    def upload(self, destination, carousels, progress, log):
         folder_id, resource_key = destination
         flags = ['--drive-root-folder-id', folder_id]
         if resource_key:
             flags += ['--drive-resource-key', resource_key]
         remote = 'comic-maker:'
 
+        def retry(operation):
+            for attempt in range(4):
+                try:
+                    return operation()
+                except TransferError as exc:
+                    if not exc.retryable or attempt == 3:
+                        raise
+                    delay = 2 ** (attempt + 1)
+                    log(f'{exc} Retrying in {delay} seconds.')
+                    time.sleep(delay)
+
         def listing(path, *options):
-            return json.loads(self.run('lsjson', path, *flags, *options))
+            log(f'Listing {path.removeprefix(remote) or "destination"}')
+            return retry(lambda: json.loads(self.run('lsjson', path, *flags, *options, log=log)))
 
         def existing_files(path):
             return listing(path, '--hash', '--hash-type', 'MD5', '--drive-use-created-date')
@@ -154,29 +186,49 @@ class Drive:
                 raise ValueError(f'The slides already on Drive in {name} are out of order. Choose another destination.')
             return seen
 
-        children = listing(remote)
-        pending = []
-        for name, files in carousels:
+        def folder_state(name, files, children):
             path = remote + name
             matches = [entry for entry in children if entry['Name'] == name]
             if matches and (len(matches) != 1 or not matches[0]['IsDir'] or '\t' in matches[0].get('ID', '')):
                 raise ValueError(f'The Drive name {name} is already in use. Choose another destination.')
             seen = verified_prefix(name, files, existing_files(path)) if matches else set()
-            pending.append((name, files, bool(matches), seen))
+            return bool(matches), seen
 
+        children = listing(remote)
+        states = [folder_state(name, files, children) for name, files in carousels]
         done = 0
         total = sum(len(files) for _, files in carousels)
-        for name, files, exists, seen in pending:
+        for (name, files), initial_state in zip(carousels, states):
             path = remote + name
-            if not exists:
-                self.run('mkdir', path, *flags)
-            for file in files:
-                progress(done, total, f'{name} / {file.name}')
-                if file.name not in seen:
+            state = initial_state
+
+            def send_carousel():
+                nonlocal state
+                # After a failed write, check Drive before retrying. It may have accepted the file.
+                exists, seen = state if state is not None else folder_state(name, files, listing(remote))
+                state = None
+                if not exists:
+                    log(f'Creating folder {name}')
+                    self.run('mkdir', path, *flags, log=log)
+                for file in files:
+                    if file.name in seen:
+                        log(f'Already verified {name}/{file.name}')
+                        continue
+                    progress(done + len(seen), total, f'{name} / {file.name}')
+                    log(f'Uploading {name}/{file.name}')
                     self.run('copyto', str(file), path + '/' + file.name, *flags,
-                             '--immutable', '--checksum', '--no-update-modtime')
-                done += 1
-            if len(verified_prefix(name, files, existing_files(path))) != len(files):
-                raise ValueError(f'Drive could not verify every file in {name}. Try again to continue.')
+                             '--immutable', '--checksum', '--no-update-modtime', log=log)
+                    seen.add(file.name)
+                    log(f'Uploaded {name}/{file.name}')
+
+            retry(send_carousel)
+
+            def verify_carousel():
+                if len(verified_prefix(name, files, existing_files(path))) != len(files):
+                    raise TransferError(f'Drive has not listed every file in {name} yet.', retryable=True)
+
+            retry(verify_carousel)
+            log(f'Verified {len(files)} files in {name}')
+            done += len(files)
             progress(done, total, name)
         return total

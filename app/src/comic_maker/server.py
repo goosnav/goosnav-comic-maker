@@ -12,6 +12,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 from . import pipeline, imaging, __version__
+from .drive import folder_link
 from .settings import Store, Settings, atomic_json
 from .jobs import Jobs
 
@@ -174,7 +175,17 @@ def create_app(store=None,token=None):
     def get_job(identifier:str): return jobs.get(identifier)
 
     @app.get('/api/drive')
-    def drive_status(): return jobs.drive.status()
+    def drive_status():
+        saved = store.read('drive-destination.json', {})
+        return {**jobs.drive.status(), 'link': saved.get('link', '')}
+
+    @app.post('/api/drive/destination')
+    def save_drive_destination(body: dict):
+        link = body.get('link')
+        if link != '':
+            folder_link(link)
+        atomic_json(store.root/'drive-destination.json', {'link': link.strip()}, private=True)
+        return {'ok': True}
 
     @app.post('/api/drive/connect')
     def connect_drive():
@@ -183,7 +194,18 @@ def create_app(store=None,token=None):
 
     @app.post('/api/jobs/{identifier}/upload-drive')
     def upload_drive(identifier: str, body: dict):
-        return jobs.queue_upload(identifier, body.get('link'))
+        link = body.get('link')
+        folder_link(link)
+        save_drive_destination({'link': link})
+        return jobs.queue_upload(identifier, link)
+
+    @app.get('/api/jobs/{identifier}/drive-log')
+    def drive_log(identifier: str):
+        job = jobs.get(identifier)
+        path = jobs.drive_log(job['id'])
+        if not path.is_file():
+            raise HTTPException(404)
+        return FileResponse(path, media_type='text/plain')
 
     @app.post('/api/jobs/{identifier}/{action}')
     def job_action(identifier:str,action:str):

@@ -6,6 +6,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from pathlib import Path
 from . import pipeline, imaging
 from .drive import Drive, carousel_exports, folder_link
@@ -28,7 +29,7 @@ class Jobs:
         self.db.commit()
         for job in reversed(self.list()):
             if job.get('drive_upload', {}).get('status') in ('queued', 'running'):
-                job['drive_upload'] = {'status': 'failed', 'message': 'Upload interrupted. Use the same Drive link to continue.'}
+                job['drive_upload'].update(status='failed', message='Upload interrupted. Use the same Drive link to continue.')
                 self.save(job)
             if job.get('schema_version') == 2 and job['status'] not in ('running','queued'):
                 root = Path(job['output'])
@@ -187,31 +188,51 @@ class Jobs:
                 if not self.drive.config.is_file():
                     raise ValueError('Connect Google Drive first.')
                 carousels = carousel_exports(job)
-                job['drive_upload'] = {'status': 'queued', 'message': 'Drive upload queued.'}
+                log_path = self.drive_log(job['id'])
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                log_path.touch(mode=0o600)
+                job['drive_upload'] = {'status': 'queued', 'message': 'Drive upload queued.', 'has_log': True}
                 self.save(job)
-                self.pool.submit(self.run_upload, identifier, destination, carousels)
+                self.pool.submit(self.run_upload, identifier, destination, carousels, log_path)
             except Exception:
                 self.drive.lock.release()
                 raise
         return job['drive_upload']
 
-    def run_upload(self, identifier, destination, carousels):
+    def drive_log(self, identifier):
+        return self.store.root/'drive-uploads'/f'{identifier}.log'
+
+    def run_upload(self, identifier, destination, carousels, log_path):
+        def log(message):
+            timestamp = datetime.now().astimezone().isoformat(timespec='seconds')
+            try:
+                with log_path.open('a', encoding='utf-8') as file:
+                    file.write(f'[{timestamp}] {message}\n')
+            except OSError:
+                # A log write failure must not turn a successful transfer into an upload failure.
+                pass
+
         def save(status, message):
             with self.lock:
                 job = self.get(identifier)
-                job['drive_upload'] = {'status': status, 'message': message}
+                job['drive_upload'].update(status=status, message=message)
                 self.save(job)
 
         try:
+            log(f'Starting upload for batch {identifier} with {len(carousels)} carousels')
             save('running', 'Checking the destination and any existing slides…')
             total = self.drive.upload(destination, carousels, lambda done, count, file:
-                save('running', f'{done} of {count} files ready on Drive · {file}'))
+                save('running', f'{done} of {count} files ready on Drive · {file}'), log)
             count = len(carousels)
-            save('complete', f'Drive upload complete · {count} carousel{"s" if count != 1 else ""}, {total} files.')
+            message = f'Drive upload complete · {count} carousel{"s" if count != 1 else ""}, {total} files.'
+            log(message)
+            save('complete', message)
         except ValueError as exc:
+            log(f'Upload stopped: {exc}')
             save('failed', str(exc))
-        except Exception:
-            save('failed', 'The upload stopped. Check the export folder and try the same Drive link to continue.')
+        except Exception as exc:
+            log(f'Upload stopped: {type(exc).__name__}: {exc}')
+            save('failed', 'The upload stopped. Open the upload log for details.')
         finally:
             self.drive.lock.release()
 
