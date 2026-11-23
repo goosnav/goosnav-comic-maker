@@ -173,6 +173,18 @@ def create_app(store=None,token=None):
     @app.get('/api/jobs/{identifier}')
     def get_job(identifier:str): return jobs.get(identifier)
 
+    @app.get('/api/drive')
+    def drive_status(): return jobs.drive.status()
+
+    @app.post('/api/drive/connect')
+    def connect_drive():
+        jobs.drive.connect()
+        return jobs.drive.status()
+
+    @app.post('/api/jobs/{identifier}/upload-drive')
+    def upload_drive(identifier: str, body: dict):
+        return jobs.queue_upload(identifier, body.get('link'))
+
     @app.post('/api/jobs/{identifier}/{action}')
     def job_action(identifier:str,action:str):
         if action=='cancel': return jobs.cancel(identifier)
@@ -208,6 +220,8 @@ def create_app(store=None,token=None):
 
     @app.post('/api/quit')
     def quit_app():
+        if jobs.drive.lock.locked():
+            raise ValueError('Wait for the Google Drive operation to finish before quitting.')
         for job in jobs.list():
             if job['status'] in ('running','queued'): jobs.cancel(job['id'])
         if app.state.stop: app.state.stop()

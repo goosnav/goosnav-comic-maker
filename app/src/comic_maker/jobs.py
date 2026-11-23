@@ -8,6 +8,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from . import pipeline, imaging
+from .drive import Drive, carousel_exports, folder_link
 from .settings import Settings, atomic_json
 
 class Cancelled(Exception):
@@ -19,12 +20,16 @@ class Jobs:
         self.lock=threading.RLock()
         self.image_lock=threading.Lock()
         self.pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='comic')
+        self.drive = Drive(store.root)
         self.db=sqlite3.connect(store.root/'jobs.sqlite',check_same_thread=False)
         self.db.execute('PRAGMA journal_mode=WAL')
         self.db.execute('CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, data TEXT NOT NULL)')
         self.db.execute('CREATE TABLE IF NOT EXISTS sources (id TEXT PRIMARY KEY, path TEXT NOT NULL)')
         self.db.commit()
         for job in reversed(self.list()):
+            if job.get('drive_upload', {}).get('status') in ('queued', 'running'):
+                job['drive_upload'] = {'status': 'failed', 'message': 'Upload interrupted. Use the same Drive link to continue.'}
+                self.save(job)
             if job.get('schema_version') == 2 and job['status'] not in ('running','queued'):
                 root = Path(job['output'])
                 settings = Settings.model_validate(job['settings'])
@@ -126,6 +131,7 @@ class Jobs:
     def regenerate(self, identifier, source_identifier, layout=None):
         with self.lock:
             job = self.get(identifier)
+            self.check_upload(job)
             if job.get('schema_version') != 2:
                 raise ValueError('Import this comic to create a new run; older exports remain unchanged')
             if job['status'] in ('queued','running'):
@@ -153,6 +159,7 @@ class Jobs:
     def resume(self,identifier):
         with self.lock:
             job=self.get(identifier)
+            self.check_upload(job)
             if job.get('schema_version') != 2: raise ValueError('Import the originals for the new export workflow')
             if job['status'] in ('running','queued'): raise ValueError('Batch is already running')
             job['cancel_requested']=False;job['status']='queued'
@@ -162,6 +169,51 @@ class Jobs:
             self.save(job)
         self.pool.submit(self.run,identifier)
         return job
+
+    def check_upload(self, job):
+        if job.get('drive_upload', {}).get('status') in ('queued', 'running'):
+            raise ValueError('Wait for the Drive upload to finish.')
+
+    def queue_upload(self, identifier, link):
+        destination = folder_link(link)
+        with self.lock:
+            job = self.get(identifier)
+            if job['status'] in ('running', 'queued'):
+                raise ValueError('Wait for this batch to finish exporting.')
+            self.drive.binary()
+            if not self.drive.lock.acquire(blocking=False):
+                raise ValueError('Wait for the current Drive operation to finish.')
+            try:
+                if not self.drive.config.is_file():
+                    raise ValueError('Connect Google Drive first.')
+                carousels = carousel_exports(job)
+                job['drive_upload'] = {'status': 'queued', 'message': 'Drive upload queued.'}
+                self.save(job)
+                self.pool.submit(self.run_upload, identifier, destination, carousels)
+            except Exception:
+                self.drive.lock.release()
+                raise
+        return job['drive_upload']
+
+    def run_upload(self, identifier, destination, carousels):
+        def save(status, message):
+            with self.lock:
+                job = self.get(identifier)
+                job['drive_upload'] = {'status': status, 'message': message}
+                self.save(job)
+
+        try:
+            save('running', 'Checking the destination and any existing slides…')
+            total = self.drive.upload(destination, carousels, lambda done, count, file:
+                save('running', f'{done} of {count} files ready on Drive · {file}'))
+            count = len(carousels)
+            save('complete', f'Drive upload complete · {count} carousel{"s" if count != 1 else ""}, {total} files.')
+        except ValueError as exc:
+            save('failed', str(exc))
+        except Exception:
+            save('failed', 'The upload stopped. Check the export folder and try the same Drive link to continue.')
+        finally:
+            self.drive.lock.release()
 
     def run(self,identifier):
         job=self.get(identifier);settings=Settings.model_validate(job['settings'])

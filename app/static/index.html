@@ -16,6 +16,18 @@
 <h1 id="history-title" hidden>Export history</h1>
 <section class="batches" id="export-results" hidden><div class="section-heading" id="export-heading"><h2>Current exports</h2></div><div id="jobs"></div></section>
 </main>
+<dialog id="drive-dialog" aria-labelledby="drive-title">
+  <form id="drive-form">
+    <div class="dialog-heading"><h2 id="drive-title">Upload carousels to Drive</h2><button type="button" id="drive-close" aria-label="Close Drive upload">×</button></div>
+    <label for="drive-link">Google Drive folder link</label>
+    <input id="drive-link" type="url" placeholder="https://drive.google.com/drive/folders/…" required>
+    <p id="drive-status" class="hint" role="status"></p>
+    <div class="dialog-footer actions">
+      <button type="button" id="drive-connect">Connect Google Drive</button>
+      <button type="submit" id="drive-upload" class="primary" disabled>Upload carousels</button>
+    </div>
+  </form>
+</dialog>
 <dialog id="settings-dialog"><form id="settings-form"><div class="dialog-heading"><h2>Settings</h2><button type="button" data-close="settings-dialog" aria-label="Close settings">×</button></div>
 <div class="settings-grid"><section><h3>Scan cleanup</h3><label for="ink-strength">Ink strength <output id="ink-value">50</output></label><input id="ink-strength" type="range" min="0" max="100" value="50"><p class="hint">Higher values retain fainter pencil strokes.</p><label for="cleanup">Dust removal <output id="cleanup-value">20</output></label><input id="cleanup" type="range" min="0" max="100" value="20"><label for="master-scale">Print enlargement</label><select id="master-scale"><option value="1">Native resolution</option><option value="2">2×</option><option value="3">3×</option><option value="4">4×</option></select><p class="hint">Native resolution retains all scan detail. Enlargement keeps the same print size.</p></section>
 <section><h3>Social slides</h3><label for="panel-grid">Panel artwork grid width</label><input id="panel-grid" type="number" min="16" max="16384" value="512" placeholder="Native"><label for="summary-grid">Summary artwork grid width</label><input id="summary-grid" type="number" min="16" max="16384" value="1024" placeholder="Native"><p class="hint">Lower widths create larger pixel blocks. Leave blank to retain source pixels.</p><label for="pattern">Filename filter</label><input id="pattern" value="*" placeholder="*raw*"></section></div><div class="dialog-footer"><button type="submit" class="primary">Save settings</button></div></form></dialog>

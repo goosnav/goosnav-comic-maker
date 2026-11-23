@@ -39,6 +39,14 @@ all-social-carousels/
 
 The caption filename is the exact name of its containing carousel folder plus `.txt`. Slides are numbered without padding or descriptions. The summary is last; an enabled ad is second to last. Caption files are created when a caption source is selected. Existing collected carousels are brought into this format when the app opens.
 
+## Upload carousels to Google Drive
+
+Install [rclone](https://rclone.org/install/) for Drive uploads. On macOS with Homebrew, use `brew install rclone`. After a batch that includes `all-social-carousels` finishes, click **Upload to Drive** on that batch. Connect your Google account once, paste the folder link used by your Repurpose workflow, then click **Upload carousels**. The account needs permission to add files to that folder.
+
+Each carousel becomes a direct subfolder of the linked folder. The app sends its matching caption first, if present, then uploads `image-1.png`, `image-2.png`, and the remaining images in order. It waits for each transfer to finish and checks the order by Drive creation time. The upload includes only the completed social carousel folders and their files.
+
+If an upload stops, use the same link again to continue. The app checks existing files and continues after slides already present in the correct order. Use a different destination if matching carousel folders contain different or out-of-order files.
+
 ## Print and social quality
 
 - **Print:** cleaned full page and comic-only crop, each as lossless PNG and TIFF. Both contain black ink and white paper at full source resolution. The crop encloses accepted panel boundaries with a small margin.
